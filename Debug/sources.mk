@@ -24,5 +24,6 @@ C_DEPS :=
 SUBDIRS := \
 Core/Src \
 Core/Startup \
+Drivers/RV-3032-C7 \
 Drivers/STM32G0xx_HAL_Driver/Src \
 

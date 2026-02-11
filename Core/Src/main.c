@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include "matrix.h"
+#include "rtc_rv3032.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,6 +36,8 @@
 #define NUM_ROWS 7
 #define NUM_COLS 84
 #define TOTAL_SR_BITS 88 // 11 chips * 8 bits
+
+extern I2C_HandleTypeDef hi2c1;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,6 +46,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
@@ -53,6 +58,7 @@ TIM_HandleTypeDef htim3;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -100,33 +106,50 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM3_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   Matrix_Init();
-  HAL_TIM_Base_Start_IT(&htim3);   // ← important!
+  HAL_TIM_Base_Start_IT(&htim3);
+
+  if (RV3032_Init(&hi2c1)) {
+      // Set initial time
+      RV3032_SetTime(30, 01, 3, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+//  Matrix_Clear();  // Start with a blank screen
+//
+//  // === CHANGE YOUR TEXT HERE – ONLY ONE PLACE! ===
+//  const char *my_message = "2:15pm  Wed 11";   // ← Edit this line only, 14 CHAR MAX
+//
+//  // Automatically calculate length and centered position
+//  int len = strlen(my_message);
+//  int start_col = (NUM_COLS - (len * 6)) / 2;   // Centers it horizontally
+//  // Optional: clamp to avoid going off-screen left/right
+//  if (start_col < 0) start_col = 0;
+//
+//  // Draw the message on row 0 (top row). Change the 0 to 1,2,... if you want it lower
+//  Matrix_DrawText(0, start_col, my_message);
   Matrix_Clear();  // Start with a blank screen
-
-  // === CHANGE YOUR TEXT HERE – ONLY ONE PLACE! ===
-  const char *my_message = "2:15pm  Wed 11";   // ← Edit this line only, 14 CHAR MAX
-
-  // Automatically calculate length and centered position
-  int len = strlen(my_message);
-  int start_col = (NUM_COLS - (len * 6)) / 2;   // Centers it horizontally
-  // Optional: clamp to avoid going off-screen left/right
-  if (start_col < 0) start_col = 0;
-
-  // Draw the message on row 0 (top row). Change the 0 to 1,2,... if you want it lower
-  Matrix_DrawText(0, start_col, my_message);
 
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  HAL_Delay(100);
+	    if (RV3032_UpdateTime()) {
+	        uint8_t hours = RV3032_GetHours();
+	        uint8_t minutes = RV3032_GetMinutes();
+	        uint8_t seconds = RV3032_GetSeconds();
+
+	        char timeStr[9];
+	        sprintf(timeStr, "%02d:%02d:%02d", hours, minutes, seconds);
+	        Matrix_DrawText(0, 0, timeStr);
+	    }
+
+	    HAL_Delay(100);
   }
   /* USER CODE END 3 */
 }
@@ -169,6 +192,54 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x00503D58;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
 }
 
 /**
@@ -231,6 +302,7 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, RCLK_Pin|SRCLK_Pin|DATA_Pin|A1_Pin
