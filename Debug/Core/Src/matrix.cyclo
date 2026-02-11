@@ -1,9 +1,0 @@
-../Core/Src/matrix.c:122:13:ShiftOutRow	4
-../Core/Src/matrix.c:145:6:Matrix_Task	4
-../Core/Src/matrix.c:174:6:Matrix_Init	1
-../Core/Src/matrix.c:179:6:Matrix_Clear	1
-../Core/Src/matrix.c:184:6:Matrix_SetPixel	8
-../Core/Src/matrix.c:197:6:Matrix_DrawChar	3
-../Core/Src/matrix.c:211:6:Matrix_DrawText	2
-../Core/Src/matrix.c:221:6:Matrix_ScrollText	2
-../Core/Src/matrix.c:233:6:HAL_TIM_PeriodElapsedCallback	5
