@@ -24,6 +24,7 @@
 #include <string.h>
 #include "matrix.h"
 #include "rtc_rv3032.h"
+#include "sht40.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -113,25 +114,16 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      RV3032_SetTime(30, 01, 3, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      RV3032_SetTime(20, 15, 3, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
+  }
+
+  if (SHT40_Init(&hi2c1)) {
+      // Sensor initialized successfully
   }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-//  Matrix_Clear();  // Start with a blank screen
-//
-//  // === CHANGE YOUR TEXT HERE – ONLY ONE PLACE! ===
-//  const char *my_message = "2:15pm  Wed 11";   // ← Edit this line only, 14 CHAR MAX
-//
-//  // Automatically calculate length and centered position
-//  int len = strlen(my_message);
-//  int start_col = (NUM_COLS - (len * 6)) / 2;   // Centers it horizontally
-//  // Optional: clamp to avoid going off-screen left/right
-//  if (start_col < 0) start_col = 0;
-//
-//  // Draw the message on row 0 (top row). Change the 0 to 1,2,... if you want it lower
-//  Matrix_DrawText(0, start_col, my_message);
   Matrix_Clear();  // Start with a blank screen
 
   while (1)
@@ -139,17 +131,29 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	    if (RV3032_UpdateTime()) {
-	        uint8_t hours = RV3032_GetHours();
-	        uint8_t minutes = RV3032_GetMinutes();
-	        uint8_t seconds = RV3032_GetSeconds();
+      static uint32_t lastTempUpdate = 0;
 
-	        char timeStr[9];
-	        sprintf(timeStr, "%02d:%02d:%02d", hours, minutes, seconds);
-	        Matrix_DrawText(0, 0, timeStr);
-	    }
+      if (RV3032_UpdateTime()) {
+          uint8_t hours = RV3032_GetHours();
+          uint8_t minutes = RV3032_GetMinutes();
+          uint8_t seconds = RV3032_GetSeconds();
 
-	    HAL_Delay(100);
+          char displayStr[16];
+
+          // Update temperature every 2 seconds (it's slow to read)
+          if (HAL_GetTick() - lastTempUpdate > 2000) {
+              SHT40_UpdateReadings();
+              lastTempUpdate = HAL_GetTick();
+          }
+
+          int temp_f = (int)(SHT40_GetTemperatureF());  // Round to nearest
+
+          // Format: "HH:MM:SS  XXF" (14 chars = 84 pixels at 6px/char)
+          sprintf(displayStr, "%02d:%02d:%02d  %3dF", hours, minutes, seconds, temp_f);
+          Matrix_DrawText(0, 0, displayStr);
+      }
+
+      HAL_Delay(100);
   }
   /* USER CODE END 3 */
 }
