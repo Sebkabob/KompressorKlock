@@ -25,6 +25,7 @@
 #include "matrix.h"
 #include "rtc_rv3032.h"
 #include "sht40.h"
+#include "battery.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -114,12 +115,14 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      RV3032_SetTime(20, 15, 3, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      RV3032_SetTime(40, 58, 3, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
   }
 
   if (SHT40_Init(&hi2c1)) {
       // Sensor initialized successfully
   }
+
+  BATTERY_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
