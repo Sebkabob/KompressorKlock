@@ -1,0 +1,9 @@
+../Core/Src/matrix.c:122:13:ShiftOutRow	32	static
+../Core/Src/matrix.c:145:6:Matrix_Task	16	static
+../Core/Src/matrix.c:174:6:Matrix_Init	8	static
+../Core/Src/matrix.c:179:6:Matrix_Clear	8	static
+../Core/Src/matrix.c:184:6:Matrix_SetPixel	32	static
+../Core/Src/matrix.c:197:6:Matrix_DrawChar	40	static
+../Core/Src/matrix.c:211:6:Matrix_DrawText	24	static
+../Core/Src/matrix.c:221:6:Matrix_ScrollText	24	static
+../Core/Src/matrix.c:233:6:HAL_TIM_PeriodElapsedCallback	32	static,ignoring_inline_asm
