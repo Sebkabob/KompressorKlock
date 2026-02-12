@@ -117,7 +117,7 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      //RV3032_SetTime(20, 00, 4, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      //RV3032_SetTime(20, 25, 10, 4, 12, 2, 2026);  // sec, min, hr, weekday, date, month, year
   }
 
   if (SHT40_Init(&hi2c1)) {
@@ -160,17 +160,26 @@ int main(void)
               __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
           }
 
-          // Update temperature every 2 seconds (it's slow to read)
-          if (HAL_GetTick() - lastTempUpdate > 2000) {
+          // Update temperature every 3 seconds (it's slow to read)
+          if (HAL_GetTick() - lastTempUpdate > 3000) {
               SHT40_UpdateReadings();
               lastTempUpdate = HAL_GetTick();
           }
 
           int temp_f = (int)(SHT40_GetTemperatureF());  // Round to nearest
+          int soc = BATTERY_GetSOC();
+          int mA = BATTERY_GetCurrent();
 
-          // Format: "HH:MM:SS  XXF" (14 chars = 84 pixels at 6px/char)
-          sprintf(displayStr, "%02d:%02d:%02d  %3dF", hours, minutes, seconds, temp_f);
+          //sprintf(displayStr, "%02d:%02d:%02d  %3dF", hours, minutes, seconds, temp_f);
+          //sprintf(displayStr, "%02d:%02d %3dmA%3dF", hours, minutes, mA, temp_f);
+          //sprintf(displayStr, "%02d:%02d  %2dF %2d%%", hours, minutes, temp_f, soc);
+          //sprintf(displayStr, "%02d:%02d:%02d %3dmA", hours, minutes, seconds, mA);
+          //sprintf(displayStr, " %2d%% %3dmA %2dF", soc, mA , temp_f);
+          //sprintf(displayStr, "%3dmA", mA);
+          sprintf(displayStr, "Good Job!");
           Matrix_DrawText(0, 0, displayStr);
+
+          BATTERY_UpdateState();
       }
 
       HAL_Delay(100);

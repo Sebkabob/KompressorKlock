@@ -6,7 +6,7 @@ static LTR_329_Measurement_t last_measurement = {0, 0};
 static uint8_t current_gain = LTR_329_GAIN_1X;
 
 /* Averaging buffer for smooth dimming */
-#define AVG_SAMPLES 20  /* 20 samples at 100ms = 2 seconds */
+#define AVG_SAMPLES 40  /* 40 samples at 100ms = 4 seconds */
 static uint8_t light_buffer[AVG_SAMPLES];
 static uint8_t buffer_index = 0;
 static uint8_t buffer_filled = 0;  /* Track if buffer has been filled once */
