@@ -22,8 +22,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
+#include <stdio.h>
 #include "matrix.h"
 #include "rtc_rv3032.h"
+#include "ltr_329.h"
 #include "sht40.h"
 #include "battery.h"
 /* USER CODE END Includes */
@@ -115,11 +117,15 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      RV3032_SetTime(40, 58, 3, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      //RV3032_SetTime(20, 00, 4, 3, 11, 2, 2026);  // sec, min, hr, weekday, date, month, year
   }
 
   if (SHT40_Init(&hi2c1)) {
       // Sensor initialized successfully
+  }
+
+  if (LTR_329_Init(&hi2c1)) {
+      // Light sensor initialized successfully
   }
 
   BATTERY_Init();
@@ -134,6 +140,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+      static uint32_t lastLightUpdate = 0;
       static uint32_t lastTempUpdate = 0;
 
       if (RV3032_UpdateTime()) {
@@ -141,7 +148,17 @@ int main(void)
           uint8_t minutes = RV3032_GetMinutes();
           uint8_t seconds = RV3032_GetSeconds();
 
-          char displayStr[16];
+          char displayStr[32];
+
+          // Update light reading every 100ms
+          if (HAL_GetTick() - lastLightUpdate >= 100) {
+              LTR_329_UpdateReadings();
+              lastLightUpdate = HAL_GetTick();
+
+              // Update timer period based on averaged light level
+              uint16_t new_period = LTR_329_GetTimerPeriod();
+              __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
+          }
 
           // Update temperature every 2 seconds (it's slow to read)
           if (HAL_GetTick() - lastTempUpdate > 2000) {
@@ -270,7 +287,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 259;
+  htim3.Init.Period = 249;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)

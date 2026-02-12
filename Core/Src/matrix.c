@@ -8,7 +8,6 @@
 static uint8_t display_buffer[NUM_ROWS][TOTAL_BYTES];
 
 static uint8_t current_row = 0;
-static uint32_t last_scan_us = 0;
 
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =

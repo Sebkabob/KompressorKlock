@@ -96,7 +96,7 @@ bool RV3032_IsPM(void)
 
 char* RV3032_StringDateUSA(void)
 {
-    static char date[11];
+    static char date[16];
     sprintf(date, "%02d/%02d/20%02d",
             RV3032_BCDtoDEC(_time[TIME_MONTH]),
             RV3032_BCDtoDEC(_time[TIME_DATE]),
@@ -106,7 +106,7 @@ char* RV3032_StringDateUSA(void)
 
 char* RV3032_StringDate(void)
 {
-    static char date[11];
+    static char date[16];
     sprintf(date, "%02d/%02d/20%02d",
             RV3032_BCDtoDEC(_time[TIME_DATE]),
             RV3032_BCDtoDEC(_time[TIME_MONTH]),
@@ -116,7 +116,7 @@ char* RV3032_StringDate(void)
 
 char* RV3032_StringTime(void)
 {
-    static char timeStr[11];
+    static char timeStr[20];
 
     if (RV3032_Is12Hour())
     {
@@ -156,7 +156,7 @@ char* RV3032_StringTime(void)
 
 char* RV3032_StringTimestamp(void)
 {
-    static char timeStr[14];
+    static char timeStr[20];
 
     uint8_t hoursCapture = RV3032_BCDtoDEC(RV3032_ReadRegister(RV3032_HOURS_CAPTURE));
     uint8_t minutesCapture = RV3032_BCDtoDEC(RV3032_ReadRegister(RV3032_MINUTES_CAPTURE));
@@ -202,7 +202,7 @@ char* RV3032_StringTimestamp(void)
 
 char* RV3032_StringTime8601(void)
 {
-    static char timeStamp[21];
+    static char timeStamp[30];
 
     sprintf(timeStamp, "20%02d-%02d-%02dT%02d:%02d:%02d",
             RV3032_BCDtoDEC(_time[TIME_YEAR]),
