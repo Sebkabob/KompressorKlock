@@ -97,7 +97,7 @@ void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 }
 
 // --- Screen 2: Time + Temp ---
-void Screen_TimeTemp(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
     sprintf(str, "   %02d:%02d:%02d  ", g_hours, g_minutes, g_seconds);
@@ -105,15 +105,19 @@ void Screen_TimeTemp(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 }
 
 // --- Screen 3: Battery ---
-void Screen_TimeFull(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-    sprintf(str, "  %2d%%  %3dmA", g_soc, g_current_mA);
+    if (g_current_mA > 0){
+        sprintf(str, "  %2d%% %3dmA  \x02  ", g_soc, g_current_mA);
+    } else {
+        sprintf(str, "  %2d%% %3dmA", g_soc, g_current_mA);
+    }
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
 // --- Screen 4: Temp / Humid ---
-void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
     sprintf(str, "  %2dF   %2d\x01%%", g_temp_f, g_humidity);
@@ -158,7 +162,7 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      //RV3032_SetTime(00, 37, 10, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      //RV3032_SetTime(00, 58, 10, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
   }
 
   if (SHT40_Init(&hi2c1)) {
@@ -174,9 +178,9 @@ int main(void)
   // Initialize screen manager and register screens
   Screen_Init();
   Screen_Register(Screen_Logo);
-  Screen_Register(Screen_TimeTemp);
-  Screen_Register(Screen_TimeFull);
+  Screen_Register(Screen_Time);
   Screen_Register(Screen_Battery);
+  Screen_Register(Screen_TempHumid);
 
   // Configure auto-cycle: rotates through screens with slide-left every 5s
   Screen_SetAutoCycle(true);
