@@ -28,6 +28,7 @@
 #include "ltr_329.h"
 #include "sht40.h"
 #include "battery.h"
+#include "screens.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,14 +71,53 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* ==================== SCREEN RENDER FUNCTIONS ====================
+ *
+ * Each screen is a function with signature:
+ *   void my_screen(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+ *
+ * It receives a zeroed buffer and draws into it using the _Buf functions.
+ * The screen manager calls this each frame, so content can be dynamic.
+ * Sensor data is read in the main loop and stored in globals so the
+ * screen functions can access it without doing I2C reads themselves.
+ */
 
-/* USER CODE BEGIN 4 */
+// Shared sensor data (updated in main loop, read by screen functions)
+static uint8_t g_hours, g_minutes, g_seconds;
+static int g_temp_f;
+static int g_soc;
+static int g_current_mA;
+static int g_humidity;
 
+// --- Screen 1: Logo ---
+void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    Matrix_DrawBitmap_Buf(buf, kompressor_logo);
+}
 
+// --- Screen 2: Time + Temp ---
+void Screen_TimeTemp(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+    sprintf(str, "%02d:%02d  %2dF %2d%%", g_hours, g_minutes, g_temp_f, g_soc);
+    Matrix_DrawText_Buf(buf, 0, 0, str);
+}
 
-/* USER CODE END 4 */
+// --- Screen 3: Time with seconds ---
+void Screen_TimeFull(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+    sprintf(str, "%02d:%02d:%02d  %3dF", g_hours, g_minutes, g_seconds, g_temp_f);
+    Matrix_DrawText_Buf(buf, 0, 0, str);
+}
 
-/* USER CODE END 4 */
+// --- Screen 4: Battery info ---
+void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+    sprintf(str, "%2d%% %3dmA %2d\x01%%", g_soc, g_current_mA, g_humidity);
+    Matrix_DrawText_Buf(buf, 0, 0, str);
+}
 /* USER CODE END 0 */
 
 /**
@@ -129,11 +169,23 @@ int main(void)
   }
 
   BATTERY_Init();
+
+  // Initialize screen manager and register screens
+  Screen_Init();
+  Screen_Register(Screen_Logo);
+  Screen_Register(Screen_TimeTemp);
+  Screen_Register(Screen_TimeFull);
+  Screen_Register(Screen_Battery);
+
+  // Configure auto-cycle: rotates through screens with slide-left every 5s
+  Screen_SetAutoCycle(true);
+  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  Matrix_Clear();  // Start with a blank screen
+//  Matrix_Fill();
+//  HAL_Delay(10000);
 
   while (1)
   {
@@ -142,49 +194,69 @@ int main(void)
     /* USER CODE BEGIN 3 */
       static uint32_t lastLightUpdate = 0;
       static uint32_t lastTempUpdate = 0;
+      static uint32_t lastTimeUpdate = 0;
+      static uint32_t lastBatteryUpdate = 0;
 
-      if (RV3032_UpdateTime()) {
-          uint8_t hours = RV3032_GetHours();
-          uint8_t minutes = RV3032_GetMinutes();
-          uint8_t seconds = RV3032_GetSeconds();
+      uint32_t now = HAL_GetTick();
 
-          char displayStr[32];
+      // Update time every 200ms
+      if (now - lastTimeUpdate >= 200) {
+          if (RV3032_UpdateTime()) {
+              uint8_t h = RV3032_GetHours();
+              uint8_t m = RV3032_GetMinutes();
+              uint8_t s = RV3032_GetSeconds();
 
-          // Update light reading every 100ms
-          if (HAL_GetTick() - lastLightUpdate >= 100) {
-              LTR_329_UpdateReadings();
-              lastLightUpdate = HAL_GetTick();
-
-              // Update timer period based on averaged light level
-              uint16_t new_period = LTR_329_GetTimerPeriod();
-              __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
+              if (h != g_hours || m != g_minutes || s != g_seconds) {
+                  g_hours = h;
+                  g_minutes = m;
+                  g_seconds = s;
+                  Screen_MarkDirty();
+              }
           }
-
-          // Update temperature every 3 seconds (it's slow to read)
-          if (HAL_GetTick() - lastTempUpdate > 3000) {
-              SHT40_UpdateReadings();
-              lastTempUpdate = HAL_GetTick();
-          }
-
-          int temp_f = (int)(SHT40_GetTemperatureF());  // Round to nearest
-          int soc = BATTERY_GetSOC();
-          int mA = BATTERY_GetCurrent();
-          int humid = SHT40_GetHumidity();
-
-          //sprintf(displayStr, "%02d:%02d:%02d  %3dF", hours, minutes, seconds, temp_f);
-          //sprintf(displayStr, "%02d:%02d %3dmA%3dF", hours, minutes, mA, temp_f);
-          //sprintf(displayStr, "%02d:%02d  %2dF %2d%%", hours, minutes, temp_f, soc);
-          //sprintf(displayStr, "%02d:%02d:%02d %3dmA", hours, minutes, seconds, mA);
-          //sprintf(displayStr, "%2d%% %3dmA %2d\x01%%", soc, mA , humid);
-          Matrix_DrawBitmap(kompressor_logo);
-          //sprintf(displayStr, "%3dmA", mA);
-          //sprintf(displayStr, "KompressorKlock");
-          //Matrix_DrawText(0, 0, displayStr);
-
-          BATTERY_UpdateState();
+          lastTimeUpdate = now;
       }
 
-      HAL_Delay(100);
+      // Update light reading every 100ms — brightness via timer period (original approach)
+      if (now - lastLightUpdate >= 100) {
+          LTR_329_UpdateReadings();
+          lastLightUpdate = now;
+
+          uint16_t new_period = LTR_329_GetTimerPeriod();
+          __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
+      }
+
+      // Update temperature every 3 seconds
+      if (now - lastTempUpdate > 3000) {
+          SHT40_UpdateReadings();
+          int new_temp = (int)(SHT40_GetTemperatureF());
+          int new_humid = SHT40_GetHumidity();
+
+          if (new_temp != g_temp_f || new_humid != g_humidity) {
+              g_temp_f = new_temp;
+              g_humidity = new_humid;
+              Screen_MarkDirty();
+          }
+          lastTempUpdate = now;
+      }
+
+      // Update battery every 1 second
+      if (now - lastBatteryUpdate >= 1000) {
+          BATTERY_UpdateState();
+          int new_soc = BATTERY_GetSOC();
+          int new_mA = BATTERY_GetCurrent();
+
+          if (new_soc != g_soc || new_mA != g_current_mA) {
+              g_soc = new_soc;
+              g_current_mA = new_mA;
+              Screen_MarkDirty();
+          }
+          lastBatteryUpdate = now;
+      }
+
+      // Drive screen state machine
+      Screen_Update();
+
+      HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }
