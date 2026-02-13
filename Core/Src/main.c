@@ -175,10 +175,11 @@ int main(void)
           //sprintf(displayStr, "%02d:%02d %3dmA%3dF", hours, minutes, mA, temp_f);
           //sprintf(displayStr, "%02d:%02d  %2dF %2d%%", hours, minutes, temp_f, soc);
           //sprintf(displayStr, "%02d:%02d:%02d %3dmA", hours, minutes, seconds, mA);
-          sprintf(displayStr, "%2d%% %3dmA %2d%%", soc, mA , humid);
+          //sprintf(displayStr, "%2d%% %3dmA %2d\x01%%", soc, mA , humid);
+          Matrix_DrawBitmap(kompressor_logo);
           //sprintf(displayStr, "%3dmA", mA);
           //sprintf(displayStr, "KompressorKlock");
-          Matrix_DrawText(0, 0, displayStr);
+          //Matrix_DrawText(0, 0, displayStr);
 
           BATTERY_UpdateState();
       }
