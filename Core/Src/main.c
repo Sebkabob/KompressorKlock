@@ -88,6 +88,7 @@ static int g_temp_f;
 static int g_soc;
 static int g_current_mA;
 static int g_humidity;
+static int g_voltage;
 
 // --- Screen 1: Logo ---
 void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -99,23 +100,23 @@ void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 void Screen_TimeTemp(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-    sprintf(str, "%02d:%02d  %2dF %2d%%", g_hours, g_minutes, g_temp_f, g_soc);
+    sprintf(str, "   %02d:%02d:%02d  ", g_hours, g_minutes, g_seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
-// --- Screen 3: Time with seconds ---
+// --- Screen 3: Battery ---
 void Screen_TimeFull(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-    sprintf(str, "%02d:%02d:%02d  %3dF", g_hours, g_minutes, g_seconds, g_temp_f);
+    sprintf(str, "  %2d%%  %3dmA", g_soc, g_current_mA);
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
-// --- Screen 4: Battery info ---
+// --- Screen 4: Temp / Humid ---
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-    sprintf(str, "%2d%% %3dmA %2d\x01%%", g_soc, g_current_mA, g_humidity);
+    sprintf(str, "  %2dF   %2d\x01%%", g_temp_f, g_humidity);
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 /* USER CODE END 0 */
@@ -157,7 +158,7 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      RV3032_SetTime(40, 00, 3, 4, 12, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      //RV3032_SetTime(00, 37, 10, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
   }
 
   if (SHT40_Init(&hi2c1)) {
@@ -179,7 +180,7 @@ int main(void)
 
   // Configure auto-cycle: rotates through screens with slide-left every 5s
   Screen_SetAutoCycle(true);
-  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
+  Screen_SetAutoCycleTransition(TRANSITION_SLIDE_UP);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -244,10 +245,12 @@ int main(void)
           BATTERY_UpdateState();
           int new_soc = BATTERY_GetSOC();
           int new_mA = BATTERY_GetCurrent();
+          int new_v = BATTERY_GetVoltage();
 
           if (new_soc != g_soc || new_mA != g_current_mA) {
               g_soc = new_soc;
               g_current_mA = new_mA;
+              g_voltage = new_v;
               Screen_MarkDirty();
           }
           lastBatteryUpdate = now;

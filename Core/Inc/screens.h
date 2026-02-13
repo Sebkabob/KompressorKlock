@@ -21,13 +21,13 @@ typedef void (*ScreenRenderFunc_t)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 /* ================= CONFIGURATION ================= */
 #define MAX_SCREENS              8
-#define AUTO_CYCLE_INTERVAL_MS   5000
+#define AUTO_CYCLE_INTERVAL_MS   10000
 
 // Time-based transition speeds (in milliseconds)
 // These are constant regardless of timer period / brightness
 #define SLIDE_H_DURATION_MS      1300   // Horizontal slide total time
 #define SLIDE_V_DURATION_MS      500   // Vertical slide total time
-#define DISSOLVE_PHASE_MS        300   // Each dissolve phase (out + in)
+#define DISSOLVE_PHASE_MS        100   // Each dissolve phase (out + in)
 
 /* ================= PUBLIC API ================= */
 
