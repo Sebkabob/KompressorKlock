@@ -1,25 +1,15 @@
 #include "matrix.h"
 #include <string.h>
 
-/* ================= CONFIG ================= */
-#define TOTAL_BYTES 11
-
 /* ================= FRAMEBUFFER ================= */
 static uint8_t display_buffer[NUM_ROWS][TOTAL_BYTES];
-
 static uint8_t current_row = 0;
-static uint32_t last_scan_us = 0;
 
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
 {
-    A1_Pin,
-    A2_Pin,
-    A3_Pin,
-    A4_Pin,
-    A5_Pin,
-    A6_Pin,
-    A7_Pin
+    A1_Pin, A2_Pin, A3_Pin, A4_Pin,
+    A5_Pin, A6_Pin, A7_Pin
 };
 
 /* ================= FONT ================= */
@@ -27,26 +17,30 @@ static const uint8_t font5x7[128][5] =
 {
 [' ']={0,0,0,0,0},
 
-[':'] = {0x00, 0x36, 0x36, 0x00, 0x00},  // :
-[';'] = {0x00, 0x56, 0x36, 0x00, 0x00},  // ;
-[','] = {0x00, 0x40, 0xE0, 0x00, 0x00},  // ,
-['.'] = {0x00, 0x60, 0x60, 0x00, 0x00},  // .
-['"'] = {0x00, 0x07, 0x07, 0x00, 0x00},  // "
-['\''] = {0x00, 0x07, 0x00, 0x00, 0x00}, // ' (single quote)
-['-'] = {0x08, 0x08, 0x08, 0x08, 0x08},  // - (horizontal line, centered)
-['+'] = {0x08, 0x08, 0x3E, 0x08, 0x08},  // +
-['*'] = {0x14, 0x08, 0x3E, 0x08, 0x14},  // *
-['('] = {0x00, 0x1C, 0x22, 0x41, 0x00},  // (
-[')'] = {0x00, 0x41, 0x22, 0x1C, 0x00},  // )
-['$'] = {0x24, 0x2A, 0x7F, 0x2A, 0x12},  // $
-['#'] = {0x14, 0x7F, 0x14, 0x7F, 0x14},  // #
-['@'] = {0x3E, 0x45, 0x4D, 0x55, 0x3E},  // @ (common compact version)
-['!'] = {0x00, 0x00, 0x4F, 0x00, 0x00},  // !
-['?'] = {0x02, 0x01, 0x51, 0x09, 0x06},  // ?
-['^'] = {0x04, 0x02, 0x01, 0x02, 0x04},  // ^
-['&'] = {0x32, 0x49, 0x49, 0x26, 0x50},  // & (ampersand)
-['<'] = {0x08, 0x14, 0x22, 0x41, 0x00},  // <
-['>'] = {0x00, 0x41, 0x22, 0x14, 0x08},  // >
+[0x01] = {0x38, 0x44, 0x43, 0x44, 0x38}, //water drop
+[0x02] = {0x08, 0x6c, 0x3e, 0x1b, 0x08}, //bolt
+
+[':'] = {0x00, 0x36, 0x36, 0x00, 0x00},
+[';'] = {0x00, 0x56, 0x36, 0x00, 0x00},
+[','] = {0x00, 0x40, 0xE0, 0x00, 0x00},
+['.'] = {0x00, 0x60, 0x60, 0x00, 0x00},
+['"'] = {0x00, 0x07, 0x07, 0x00, 0x00},
+['\''] = {0x00, 0x07, 0x00, 0x00, 0x00},
+['-'] = {0x08, 0x08, 0x08, 0x08, 0x08},
+['+'] = {0x08, 0x08, 0x3E, 0x08, 0x08},
+['*'] = {0x14, 0x08, 0x3E, 0x08, 0x14},
+['('] = {0x00, 0x1C, 0x22, 0x41, 0x00},
+[')'] = {0x00, 0x41, 0x22, 0x1C, 0x00},
+['$'] = {0x24, 0x2A, 0x7F, 0x2A, 0x12},
+['#'] = {0x14, 0x7F, 0x14, 0x7F, 0x14},
+['@'] = {0x3E, 0x45, 0x4D, 0x55, 0x3E},
+['!'] = {0x00, 0x00, 0x4F, 0x00, 0x00},
+['?'] = {0x02, 0x01, 0x51, 0x09, 0x06},
+['^'] = {0x04, 0x02, 0x01, 0x02, 0x04},
+['&'] = {0x32, 0x49, 0x49, 0x26, 0x50},
+['<'] = {0x08, 0x14, 0x22, 0x41, 0x00},
+['>'] = {0x00, 0x41, 0x22, 0x14, 0x08},
+['%'] = {0x23, 0x13, 0x08, 0x64, 0x62},
 
 ['0']={0x3E,0x51,0x49,0x45,0x3E},
 ['1']={0x00,0x42,0x7F,0x40,0x00},
@@ -114,22 +108,47 @@ static const uint8_t font5x7[128][5] =
 ['z']={0x44,0x64,0x54,0x4C,0x44}
 };
 
+const uint8_t kompressor_logo[NUM_ROWS][TOTAL_BYTES] = {
+    {0x01, 0x2e, 0xfb, 0xbd, 0xdd, 0xdd, 0xe0, 0x94, 0x77, 0x48, 0x00},
+    {0x01, 0x2a, 0xaa, 0xa5, 0x11, 0x15, 0x20, 0x94, 0x54, 0x48, 0x00},
+    {0x01, 0x6a, 0xaa, 0xa5, 0x11, 0x15, 0x20, 0xb4, 0x54, 0x58, 0x00},
+    {0x01, 0xca, 0xab, 0xbd, 0xdd, 0xd5, 0xe0, 0xe4, 0x54, 0x70, 0x00},
+    {0x01, 0x6a, 0x8a, 0x29, 0x04, 0x55, 0x40, 0xb4, 0x54, 0x58, 0x00},
+    {0x01, 0x2a, 0x8a, 0x2d, 0x04, 0x55, 0x60, 0x94, 0x54, 0x48, 0x00},
+    {0x01, 0x2e, 0x8a, 0x25, 0xdd, 0xdd, 0x20, 0x97, 0x77, 0x48, 0x00},
+};
+
+/* ================= INTERNAL HELPERS ================= */
+
+static uint8_t reverse_byte(uint8_t b)
+{
+    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+    return b;
+}
+
+static void set_pixel_buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int r, int c, uint8_t state)
+{
+    if (r < 0 || r >= NUM_ROWS || c < 0 || c >= NUM_COLS) return;
+    int byte = c / 8;
+    int bit = c % 8;
+    if (state)
+        buf[r][byte] |= (1 << bit);
+    else
+        buf[r][byte] &= ~(1 << bit);
+}
+
 /* ================= SHIFT ================= */
-/* NOTE:
-   First bit shifted goes to C84
-   So we must output columns in REVERSE order
-*/
 static void ShiftOutRow(uint8_t *row_data)
 {
-    for(int col = 0; col < 84; col++)
+    for (int col = 0; col < 84; col++)
     {
         int byte = col / 8;
         int bit  = col % 8;
-
         uint8_t val = (row_data[byte] >> bit) & 1;
 
-        HAL_GPIO_WritePin(GPIOA,
-            DATA_Pin,
+        HAL_GPIO_WritePin(GPIOA, DATA_Pin,
             val ? GPIO_PIN_RESET : GPIO_PIN_SET);
 
         HAL_GPIO_WritePin(GPIOA, SRCLK_Pin, GPIO_PIN_SET);
@@ -140,96 +159,93 @@ static void ShiftOutRow(uint8_t *row_data)
     HAL_GPIO_WritePin(GPIOA, RCLK_Pin, GPIO_PIN_RESET);
 }
 
-
 /* ================= CORE SCAN ================= */
 void Matrix_Task(void)
 {
     static uint32_t last_scan = 0;
-
-    /* 1 ms per row */
-    if(HAL_GetTick() - last_scan < 1)
-        return;
-
+    if (HAL_GetTick() - last_scan < 1) return;
     last_scan = HAL_GetTick();
 
-    /* turn OFF all rows first */
-    for(int r = 0; r < NUM_ROWS; r++)
+    for (int r = 0; r < NUM_ROWS; r++)
         HAL_GPIO_WritePin(GPIOA, ROW_PINS[r], GPIO_PIN_SET);
 
-    /* shift next row */
     ShiftOutRow(display_buffer[current_row]);
 
-    /* enable active row */
-    HAL_GPIO_WritePin(GPIOA,
-        ROW_PINS[current_row],
-        GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, ROW_PINS[current_row], GPIO_PIN_RESET);
 
     current_row++;
-    if(current_row >= NUM_ROWS)
-        current_row = 0;
+    if (current_row >= NUM_ROWS) current_row = 0;
 }
 
+/* ================= DRAW (display buffer) ================= */
+void Matrix_Init(void)  { Matrix_Clear(); }
+void Matrix_Clear(void) { memset(display_buffer, 0, sizeof(display_buffer)); }
+void Matrix_Fill(void)  { memset(display_buffer, 0xFF, sizeof(display_buffer)); }
 
-/* ================= DRAW ================= */
-void Matrix_Init(void)
+void Matrix_SetPixel(int r, int c, uint8_t state)
 {
-    Matrix_Clear();
+    set_pixel_buf(display_buffer, r, c, state);
 }
 
-void Matrix_Clear(void)
+void Matrix_DrawChar(int row, int col, char c)
 {
-    memset(display_buffer,0,sizeof(display_buffer));
+    Matrix_DrawChar_Buf(display_buffer, row, col, c);
 }
 
-void Matrix_SetPixel(int r,int c,uint8_t state)
+void Matrix_DrawText(int row, int col, const char *text)
 {
-    if(r<0||r>=NUM_ROWS||c<0||c>=NUM_COLS) return;
-
-    int byte=c/8;
-    int bit=c%8;
-
-    if(state)
-        display_buffer[r][byte]|=(1<<bit);
-    else
-        display_buffer[r][byte]&=~(1<<bit);
+    Matrix_DrawText_Buf(display_buffer, row, col, text);
 }
 
-void Matrix_DrawChar(int row,int col,char c)
+void Matrix_ScrollText(const char *text, int offset)
 {
-    for(int x=0;x<5;x++)
-    {
-        uint8_t column=font5x7[(int)c][x];
+    int x = -offset;
+    while (*text) {
+        Matrix_DrawChar(0, x, *text);
+        x += 6;
+        text++;
+    }
+}
 
-        for(int y=0;y<7;y++)
-        {
-            Matrix_SetPixel(row+y,col+x,
-                (column>>y)&1);
+void Matrix_DrawBitmap(const uint8_t bitmap[NUM_ROWS][TOTAL_BYTES])
+{
+    Matrix_DrawBitmap_Buf(display_buffer, bitmap);
+}
+
+void Matrix_LoadBuffer(const uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    memcpy(display_buffer, buf, sizeof(display_buffer));
+}
+
+/* ================= DRAW (arbitrary buffer) ================= */
+
+void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c)
+{
+    for (int x = 0; x < 5; x++) {
+        uint8_t column = font5x7[(int)c][x];
+        for (int y = 0; y < 7; y++) {
+            set_pixel_buf(buf, row + y, col + x, (column >> y) & 1);
         }
     }
 }
 
-void Matrix_DrawText(int row,int col,const char *text)
+void Matrix_DrawText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text)
 {
-    while(*text)
-    {
-        Matrix_DrawChar(row,col,*text);
-        col+=6;
+    while (*text) {
+        Matrix_DrawChar_Buf(buf, row, col, *text);
+        col += 6;
         text++;
     }
 }
 
-void Matrix_ScrollText(const char *text,int offset)
+void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t src[NUM_ROWS][TOTAL_BYTES])
 {
-    int x=-offset;
-
-    while(*text)
-    {
-        Matrix_DrawChar(0,x,*text);
-        x+=6;
-        text++;
-    }
+    for (int r = 0; r < NUM_ROWS; r++)
+        for (int b = 0; b < TOTAL_BYTES; b++)
+            dest[r][b] = reverse_byte(src[r][b]);
 }
 
+/* ================= ISR CALLBACK (original, unchanged) ================= */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM3)
@@ -241,12 +257,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         }
 
         // Short dead time (prevents ghosting)
-        for (volatile int i = 0; i < 20; i++) { __NOP(); }   // ~1–2 µs depending on clock
+        for (volatile int i = 0; i < 20; i++) { __NOP(); }
 
         // Shift out next row data
         ShiftOutRow(display_buffer[current_row]);
 
-        // Another tiny delay after shift (stabilize latches)
+        // Stabilize latches
         for (volatile int i = 0; i < 10; i++) { __NOP(); }
 
         // Turn ON current row
