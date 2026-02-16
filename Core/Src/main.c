@@ -90,6 +90,56 @@ static int g_current_mA;
 static int g_humidity;
 static int g_voltage;
 
+// Charger status from BQ25120 STAT1/STAT2 pins
+// STAT1=HIGH, STAT2=HIGH -> Charge complete / sleep / disabled (VBAT > VRCH)
+// STAT1=HIGH, STAT2=LOW  -> Normal charging in progress (incl. auto recharge)
+// STAT1=LOW,  STAT2=HIGH -> Recoverable fault (VIN_OVP, TS HOT/COLD, TSHUT, short)
+// STAT1=LOW,  STAT2=LOW  -> Non-recoverable / latch-off fault (ILIM/ISET short, BATOCP, safety timer)
+typedef enum {
+    CHARGER_COMPLETE_OR_DISABLED,   // STAT1=H, STAT2=H
+    CHARGER_CHARGING,               // STAT1=H, STAT2=L
+    CHARGER_FAULT_RECOVERABLE,      // STAT1=L, STAT2=H (OVP, TS, TSHUT, system short)
+    CHARGER_FAULT_LATCHOFF          // STAT1=L, STAT2=L (ILIM/ISET short, BATOCP, safety timer)
+} ChargerStatus_t;
+
+static ChargerStatus_t g_charger_status = CHARGER_COMPLETE_OR_DISABLED;
+static bool g_charger_fault = false;           // true if any fault detected
+static bool g_charger_fault_recoverable = false; // true if recoverable fault
+static bool g_charger_fault_latchoff = false;    // true if non-recoverable latch-off fault
+
+/**
+ * @brief Read BQ25120 STAT1/STAT2 pins and update charger status flags
+ */
+
+static void Charger_UpdateStatus(void)
+{
+    GPIO_PinState stat1 = HAL_GPIO_ReadPin(STAT1_GPIO_Port, STAT1_Pin);
+    GPIO_PinState stat2 = HAL_GPIO_ReadPin(STAT2_GPIO_Port, STAT2_Pin);
+
+    if (stat1 == GPIO_PIN_SET && stat2 == GPIO_PIN_SET) {
+        g_charger_status = CHARGER_COMPLETE_OR_DISABLED;
+        g_charger_fault = false;
+        g_charger_fault_recoverable = false;
+        g_charger_fault_latchoff = false;
+    } else if (stat1 == GPIO_PIN_SET && stat2 == GPIO_PIN_RESET) {
+        g_charger_status = CHARGER_CHARGING;
+        g_charger_fault = false;
+        g_charger_fault_recoverable = false;
+        g_charger_fault_latchoff = false;
+    } else if (stat1 == GPIO_PIN_RESET && stat2 == GPIO_PIN_SET) {
+        g_charger_status = CHARGER_FAULT_RECOVERABLE;
+        g_charger_fault = true;
+        g_charger_fault_recoverable = true;
+        g_charger_fault_latchoff = false;
+    } else {
+        // STAT1=LOW, STAT2=LOW
+        g_charger_status = CHARGER_FAULT_LATCHOFF;
+        g_charger_fault = true;
+        g_charger_fault_recoverable = false;
+        g_charger_fault_latchoff = true;
+    }
+}
+
 static int g_scroll_offset = 0;
 static uint32_t g_scroll_tick = 0;
 
@@ -122,11 +172,29 @@ void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
+//// --- Screen 3: Battery ---
+//void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+//{
+//    char str[32];
+//    if (g_current_mA > 0){
+//        sprintf(str, "  %2d%% %3dmA \x02  ", g_soc, g_current_mA);
+//    } else {
+//        sprintf(str, " %2d%% %4dmV", g_soc, g_voltage);
+//    }
+//    Matrix_DrawText_Buf(buf, 0, 0, str);
+//}
+
 // --- Screen 3: Battery ---
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-    if (g_current_mA > 0){
+
+    // Show fault warning if charger has a problem
+    if (g_charger_fault_latchoff) {
+        sprintf(str, " CHG FAULT!");
+    } else if (g_charger_fault_recoverable) {
+        sprintf(str, " CHG WARN! ");
+    } else if (g_current_mA > 0) {
         sprintf(str, "  %2d%% %3dmA \x02  ", g_soc, g_current_mA);
     } else {
         sprintf(str, " %2d%% %4dmV", g_soc, g_voltage);
@@ -220,6 +288,7 @@ int main(void)
       static uint32_t lastTempUpdate = 0;
       static uint32_t lastTimeUpdate = 0;
       static uint32_t lastBatteryUpdate = 0;
+      static uint32_t lastChargerCheck = 0;
 
       uint32_t now = HAL_GetTick();
 
@@ -277,6 +346,18 @@ int main(void)
               Screen_MarkDirty();
           }
           lastBatteryUpdate = now;
+      }
+
+      // Check charger STAT pins every 500ms
+      if (now - lastChargerCheck >= 500) {
+          ChargerStatus_t prev_status = g_charger_status;
+          Charger_UpdateStatus();
+
+          // Redraw if charger status changed (especially for fault display)
+          if (g_charger_status != prev_status) {
+              Screen_MarkDirty();
+          }
+          lastChargerCheck = now;
       }
 
       // Drive screen state machine
