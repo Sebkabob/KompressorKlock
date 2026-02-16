@@ -1,17 +1,11 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+*
+*	Kompressor Klock
+*	Sebastian Forenza 2026
+*
+*	Code mostly written by Claude I can't lie
+*
   *
   ******************************************************************************
   */
@@ -21,14 +15,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <string.h>
-#include <stdio.h>
 #include "matrix.h"
-#include "rtc_rv3032.h"
-#include "ltr_329.h"
-#include "sht40.h"
-#include "battery.h"
+#include "sensor_manager.h"
 #include "screens.h"
+#include "screen_impl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,10 +28,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NUM_ROWS 7
-#define NUM_COLS 84
-#define TOTAL_SR_BITS 88 // 11 chips * 8 bits
-
 extern I2C_HandleTypeDef hi2c1;
 /* USER CODE END PD */
 
@@ -56,7 +42,7 @@ I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-
+static int scroll_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,200 +57,6 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* ==================== SCREEN RENDER FUNCTIONS ====================
- *
- * Each screen is a function with signature:
- *   void my_screen(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
- *
- * It receives a zeroed buffer and draws into it using the _Buf functions.
- * The screen manager calls this each frame, so content can be dynamic.
- * Sensor data is read in the main loop and stored in globals so the
- * screen functions can access it without doing I2C reads themselves.
- */
-
-// Shared sensor data (updated in main loop, read by screen functions)
-static uint8_t g_hours, g_minutes, g_seconds;
-static uint8_t g_hours_24;
-static int g_temp_f;
-static int g_soc;
-static int g_current_mA;
-static int g_humidity;
-static int g_voltage;
-static int g_light;
-
-// Charger status from BQ25120 STAT1/STAT2 pins
-// STAT1=HIGH, STAT2=HIGH -> Charge complete / sleep / disabled (VBAT > VRCH)
-// STAT1=HIGH, STAT2=LOW  -> Normal charging in progress (incl. auto recharge)
-// STAT1=LOW,  STAT2=HIGH -> Recoverable fault (VIN_OVP, TS HOT/COLD, TSHUT, short)
-// STAT1=LOW,  STAT2=LOW  -> Non-recoverable / latch-off fault (ILIM/ISET short, BATOCP, safety timer)
-typedef enum {
-    CHARGER_COMPLETE_OR_DISABLED,   // STAT1=H, STAT2=H
-    CHARGER_CHARGING,               // STAT1=H, STAT2=L
-    CHARGER_FAULT_RECOVERABLE,      // STAT1=L, STAT2=H (OVP, TS, TSHUT, system short)
-    CHARGER_FAULT_LATCHOFF          // STAT1=L, STAT2=L (ILIM/ISET short, BATOCP, safety timer)
-} ChargerStatus_t;
-
-static ChargerStatus_t g_charger_status = CHARGER_COMPLETE_OR_DISABLED;
-static bool g_charger_fault = false;           // true if any fault detected
-static bool g_charger_fault_recoverable = false; // true if recoverable fault
-static bool g_charger_fault_latchoff = false;    // true if non-recoverable latch-off fault
-
-/**
- * @brief Read BQ25120 STAT1/STAT2 pins and update charger status flags
- */
-
-static void Charger_UpdateStatus(void)
-{
-    GPIO_PinState stat1 = HAL_GPIO_ReadPin(STAT1_GPIO_Port, STAT1_Pin);
-    GPIO_PinState stat2 = HAL_GPIO_ReadPin(STAT2_GPIO_Port, STAT2_Pin);
-
-    if (stat1 == GPIO_PIN_SET && stat2 == GPIO_PIN_SET) {
-        g_charger_status = CHARGER_COMPLETE_OR_DISABLED;
-        g_charger_fault = false;
-        g_charger_fault_recoverable = false;
-        g_charger_fault_latchoff = false;
-    } else if (stat1 == GPIO_PIN_SET && stat2 == GPIO_PIN_RESET) {
-        g_charger_status = CHARGER_CHARGING;
-        g_charger_fault = false;
-        g_charger_fault_recoverable = false;
-        g_charger_fault_latchoff = false;
-    } else if (stat1 == GPIO_PIN_RESET && stat2 == GPIO_PIN_SET) {
-        g_charger_status = CHARGER_FAULT_RECOVERABLE;
-        g_charger_fault = true;
-        g_charger_fault_recoverable = true;
-        g_charger_fault_latchoff = false;
-    } else {
-        // STAT1=LOW, STAT2=LOW
-        g_charger_status = CHARGER_FAULT_LATCHOFF;
-        g_charger_fault = true;
-        g_charger_fault_recoverable = false;
-        g_charger_fault_latchoff = true;
-    }
-}
-
-static int g_scroll_offset = 0;
-static uint32_t g_scroll_tick = 0;
-
-static int scroll_screen_index = -1;
-
-void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    static char message[128];
-    static uint32_t last_update = 0;
-    uint32_t now = HAL_GetTick();
-
-    // Update message text every second to keep date/time current
-    if (now - last_update >= 1000) {
-        const char *months[] = {
-            "January", "February", "March", "April", "May", "June",
-            "July", "August", "September", "October", "November", "December"
-        };
-
-        const char *weekdays[] = {
-            "Sunday", "Monday", "Tuesday", "Wednesday",
-            "Thursday", "Friday", "Saturday"
-        };
-
-        const char *day_suffix[] = {
-            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 0-9
-            "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",  // 10-19
-            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 20-29
-            "th", "st"                                                     // 30-31
-        };
-
-        // Get time of day greeting
-        const char *greeting;
-        if (g_hours_24 < 12) {
-            greeting = "morning";
-        } else if (g_hours_24 < 18) {
-            greeting = "afternoon";
-        } else {
-            greeting = "evening";
-        }
-
-        // Build the scrolling message
-        sprintf(message,
-            "Today is %s, %s %d%s, %d. It is a lovely %s. "
-            "The time is %02d:%02d:%02d. Battery: %d%% Temp: %dF. Have a great day!",
-            weekdays[RV3032_GetWeekday()],
-            months[RV3032_GetMonth() - 1],
-            RV3032_GetDate(),
-            day_suffix[RV3032_GetDate()],
-            RV3032_GetYear(),
-            greeting,
-            g_hours, g_minutes, g_seconds,
-            g_soc,
-            g_temp_f
-        );
-
-        last_update = now;
-    }
-
-    Matrix_ScrollText_Buf(buf, 0, message, &g_scroll_offset, 1, &g_scroll_tick);
-}
-
-void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    Matrix_DrawBitmap_Buf(buf, kompressor_logo);
-}
-
-void Screen_Logo2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    Matrix_DrawBitmap_Buf(buf, buy_a_wd);
-}
-
-void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str[32];
-    sprintf(str, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
-    Matrix_DrawTextCentered_Buf(buf, 0, str);
-}
-
-void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str[32];
-
-    // Show fault warning if charger has a problem
-    if (g_charger_fault_latchoff) {
-        sprintf(str, "CHG FAULT!");
-    } else if (g_charger_fault_recoverable) {
-        sprintf(str, "CHG WARN!");
-    } else if (g_current_mA >= 0) {
-        sprintf(str, "%2d%% %3dmA \x02", g_soc, g_current_mA);
-    } else {
-        sprintf(str, "%2d%% %3dmA", g_soc, g_current_mA);
-    }
-    Matrix_DrawTextCentered_Buf(buf, 0, str);
-}
-
-void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str[32];
-    sprintf(str, "  %2dF   %2d\x01%%", g_temp_f, g_humidity);
-    Matrix_DrawText_Buf(buf, 0, 0, str);
-}
-
-void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str1[32];
-    sprintf(str1, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
-    Matrix_DrawText_Buf(buf, 0, 0, str1);
-
-    char str2[32];
-    sprintf(str2, "%2d\x03 %2d\x01", g_temp_f, g_humidity);
-    Matrix_DrawTextRight_Buf(buf, 0, str2);
-}
-
-void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str1[32];
-    sprintf(str1, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
-    Matrix_DrawText_Buf(buf, 0, 0, str1);
-
-    char str2[32];
-    sprintf(str2, "%2d%%", g_light);
-    Matrix_DrawTextRight_Buf(buf, 0, str2);
-}
 /* USER CODE END 0 */
 
 /**
@@ -299,147 +91,57 @@ int main(void)
   MX_TIM3_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+
+  // Initialize display
   Matrix_Init();
   HAL_TIM_Base_Start_IT(&htim3);
 
-  if (RV3032_Init(&hi2c1)) {
-      // Set initial time
-	  //RV3032_SetTime(10, 03, 22, 0, 15, 2, 2026);  // sec, min, hr, weekday, date, month, year  }
-  }
-  if (SHT40_Init(&hi2c1)) {
-      // Sensor initialized successfully
-  }
-
-  if (LTR_329_Init(&hi2c1)) {
-      // Light sensor initialized successfully
-  }
-
-  BATTERY_Init();
+  // Initialize all sensors
+  SensorManager_Init(&hi2c1);
 
   // Initialize screen manager and register screens
   Screen_Init();
-  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
-//  Screen_Register(Screen_Logo);
-//  Screen_Register(Screen_Logo2);
-//  Screen_Register(Screen_Time);
-//  Screen_Register(Screen_TimeTempHumid);
-//  Screen_Register(Screen_Battery);
-//  Screen_Register(Screen_TempHumid);
-//  Screen_Register(Screen_TimeLight);
+//  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
+  // Uncomment to enable additional screens:
+  // Screen_Register(Screen_Logo);
+  // Screen_Register(Screen_Logo2);
+  // Screen_Register(Screen_Time);
+  // Screen_Register(Screen_TimeTempHumid);
+  // Screen_Register(Screen_Battery);
+  // Screen_Register(Screen_TempHumid);
+  // Screen_Register(Screen_TimeLight);
+   Screen_Register(Screen_TimeDate);
 
   Screen_SetAutoCycle(true);
   Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-//  Matrix_Fill();
-//  HAL_Delay(10000);
-
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-      static uint32_t lastLightUpdate = 0;
-      static uint32_t lastLightUpdate2 = 0;
-      static uint32_t lastTempUpdate = 0;
-      static uint32_t lastTimeUpdate = 0;
-      static uint32_t lastBatteryUpdate = 0;
-      static uint32_t lastChargerCheck = 0;
 
-      uint32_t now = HAL_GetTick();
+	    // Update all sensor readings
+	    SensorManager_Update();
 
-      // Update time every 200ms
-      if (now - lastTimeUpdate >= 200) {
-          if (RV3032_UpdateTime()) {
-              uint8_t h_12 = RV3032_GetHours();  // 12-hour format for display
-              uint8_t m = RV3032_GetMinutes();
-              uint8_t s = RV3032_GetSeconds();
+	    // Mark screen dirty if sensor data changed
+	    if (SensorManager_HasChanged()) {
+	        Screen_MarkDirty();
+	    }
 
-              // Get raw 24-hour value for logic (greeting, etc.)
-              uint8_t h_24 = RV3032_BCDtoDEC(RV3032_ReadRegister(RV3032_HOURS));
+	    // Keep scroll screen continuously dirty (it needs constant updates)
+	    if (Screen_GetCurrent() == scroll_screen_index) {
+	        Screen_MarkDirty();
+	    }
 
-              if (h_12 != g_hours || m != g_minutes || s != g_seconds) {
-                  g_hours = h_12;      // Store 12-hour for display
-                  g_hours_24 = h_24;   // Store 24-hour for logic
-                  g_minutes = m;
-                  g_seconds = s;
-                  Screen_MarkDirty();
-              }
-          }
-          lastTimeUpdate = now;
-      }
+	    // Drive screen state machine
+	    Screen_Update();
 
-      // Update light reading every 100ms — brightness via timer period (original approach)
-      if (now - lastLightUpdate >= 100) {
-          LTR_329_UpdateReadings();
-          lastLightUpdate = now;
-
-          uint16_t new_period = LTR_329_GetTimerPeriod();
-          __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
-
-          g_light = LTR_329_GetLightPercent();
-      }
-
-      // Update light reading every 77ms
-      if (now - lastLightUpdate2 >= 77) {
-          lastLightUpdate2 = now;
-
-          g_light = LTR_329_GetLightPercent();
-      }
-
-
-      // Update temperature every 3 seconds
-      if (now - lastTempUpdate > 300) {
-          SHT40_UpdateReadings();
-          int new_temp = (int)(SHT40_GetTemperatureF());
-          int new_humid = SHT40_GetHumidity();
-
-          if (new_temp != g_temp_f || new_humid != g_humidity) {
-              g_temp_f = new_temp;
-              g_humidity = new_humid;
-              Screen_MarkDirty();
-          }
-          lastTempUpdate = now;
-      }
-
-      // Update battery every 1 second
-      if (now - lastBatteryUpdate >= 500) {
-          BATTERY_UpdateState();
-          int new_soc = BATTERY_GetSOC();
-          int new_mA = BATTERY_GetCurrent();
-          int new_v = BATTERY_GetVoltage();
-
-          if (new_soc != g_soc || new_mA != g_current_mA) {
-              g_soc = new_soc;
-              g_current_mA = new_mA;
-              g_voltage = new_v;
-              Screen_MarkDirty();
-          }
-          lastBatteryUpdate = now;
-      }
-
-      // Check charger STAT pins every 500ms
-      if (now - lastChargerCheck >= 500) {
-          ChargerStatus_t prev_status = g_charger_status;
-          Charger_UpdateStatus();
-
-          // Redraw if charger status changed (especially for fault display)
-          if (g_charger_status != prev_status) {
-              Screen_MarkDirty();
-          }
-          lastChargerCheck = now;
-      }
-
-      // Drive screen state machine
-      Screen_Update();
-
-      if (Screen_GetCurrent() == scroll_screen_index) {
-          Screen_MarkDirty();
-      }
-
-      HAL_Delay(5);
+	    HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }
