@@ -5,21 +5,33 @@ static I2C_HandleTypeDef *ltr_329_hi2c = NULL;
 static LTR_329_Measurement_t last_measurement = {0, 0};
 static uint8_t current_gain = LTR_329_GAIN_1X;
 
-/* Averaging buffer for smooth dimming */
-#define AVG_SAMPLES 40  /* 40 samples at 100ms = 4 seconds */
+/*
+ * Robust averaging buffer.
+ *
+ * We collect AVG_SAMPLES readings (~2-3 seconds at 100ms intervals).
+ * Instead of a simple mean (which one bad reading can drag down),
+ * we sort the buffer and take the mean of the middle 50% (trimmed mean).
+ * This rejects outlier readings from sensor noise or IR spikes.
+ */
+#define AVG_SAMPLES 40  /* 25 samples at 100ms = 2.5 seconds */
+#define TRIM_COUNT   6  /* Discard this many from top AND bottom (24% each side) */
+
 static uint8_t light_buffer[AVG_SAMPLES];
 static uint8_t buffer_index = 0;
-static uint8_t buffer_filled = 0;  /* Track if buffer has been filled once */
+static uint8_t buffer_count = 0;  /* How many valid samples we have (up to AVG_SAMPLES) */
 
 /* I2C timeout in ms */
 #define LTR_329_I2C_TIMEOUT  100
 
-/* Maximum raw value for scaling (depends on gain and integration time) */
-#define LTR_329_MAX_RAW_VALUE  40  /* Adjusted for high sensitivity */
+/* Maximum raw C0 count that maps to 100% light.
+ * At 8x gain with C0 directly: dim office ~8, normal room ~20-40, bright ~50+.
+ * Tuned so dim office reads ~15-20% and bright light approaches 100%.
+ * Adjust after checking C0 on the debug screen in your brightest environment. */
+#define LTR_329_MAX_RAW_VALUE  50
 
-/* Timer period range */
-#define PERIOD_MIN  110  /* Period at 0% light */
-#define PERIOD_MAX  259  /* Period at 100% light */
+/* Timer period range (legacy, kept for compatibility) */
+#define PERIOD_MIN  110
+#define PERIOD_MAX  269
 
 /* Private function prototypes */
 static bool LTR_329_WriteRegister(I2C_HandleTypeDef *hi2c, uint8_t reg, uint8_t value);
@@ -75,12 +87,12 @@ bool LTR_329_Init(I2C_HandleTypeDef *hi2c)
 
     ltr_329_hi2c = hi2c;
 
-    /* Initialize averaging buffer to 0 */
+    /* Initialize averaging buffer */
     for (int i = 0; i < AVG_SAMPLES; i++) {
         light_buffer[i] = 0;
     }
     buffer_index = 0;
-    buffer_filled = 0;
+    buffer_count = 0;
 
     /* Check if device is present by reading manufacturer ID */
     uint8_t mfg_id = LTR_329_ReadManufacturerID(hi2c);
@@ -106,8 +118,10 @@ bool LTR_329_Init(I2C_HandleTypeDef *hi2c)
         return false;
     }
 
-    /* Set gain to 1x (good for indoor use) */
-    if (!LTR_329_SetGain(hi2c, LTR_329_GAIN_1X)) {
+    /* Set gain to 8x for good indoor sensitivity.
+     * At 1x, a dim office reads C0=1 C1=2 which is too low.
+     * 8x gives ~8-16 counts in dim rooms, ~60-80+ in bright rooms. */
+    if (!LTR_329_SetGain(hi2c, LTR_329_GAIN_8X)) {
         return false;
     }
 
@@ -199,19 +213,12 @@ bool LTR_329_ReadMeasurement(I2C_HandleTypeDef *hi2c, LTR_329_Measurement_t *mea
         return false;
     }
 
-    /*
-     * Important: The order of reading matters!
-     * The sensor locks the data registers when reading CH1_0.
-     * The lock is released after reading CH0_1.
-     * So we must read: CH1_0, CH1_1, CH0_0, CH0_1
-     */
-
-    /* Read Channel 1 (IR) first */
+    /* Read Channel 1 (IR) first — sensor locks data on CH1_0 read */
     if (!LTR_329_ReadRegister16(hi2c, LTR_329_REG_DATA_CH1_0, &measurement->channel1)) {
         return false;
     }
 
-    /* Read Channel 0 (Visible + IR) - this releases the lock */
+    /* Read Channel 0 (Visible + IR) — releases the lock */
     if (!LTR_329_ReadRegister16(hi2c, LTR_329_REG_DATA_CH0_0, &measurement->channel0)) {
         return false;
     }
@@ -263,17 +270,11 @@ bool LTR_329_UpdateReadings(void)
         return false;
     }
 
-    /* Calculate current light percent */
-    uint32_t visible;
-    uint32_t percent;
-
-    if (last_measurement.channel0 > last_measurement.channel1) {
-        visible = last_measurement.channel0 - last_measurement.channel1;
-    } else {
-        visible = last_measurement.channel0;
-    }
-
-    percent = (visible * 100) / LTR_329_MAX_RAW_VALUE;
+    /* Use channel 0 (visible + IR) directly as our light level.
+     * IR subtraction doesn't work well indoors — warm LEDs and
+     * incandescents cause C1 > C0, losing signal. C0 alone gives
+     * a stable, monotonic brightness indicator for dimming. */
+    uint32_t percent = ((uint32_t)last_measurement.channel0 * 100) / LTR_329_MAX_RAW_VALUE;
     if (percent > 100) {
         percent = 100;
     }
@@ -284,41 +285,87 @@ bool LTR_329_UpdateReadings(void)
 
     if (buffer_index >= AVG_SAMPLES) {
         buffer_index = 0;
-        buffer_filled = 1;
+    }
+
+    if (buffer_count < AVG_SAMPLES) {
+        buffer_count++;
     }
 
     return true;
 }
 
+/**
+ * @brief Get light intensity using trimmed mean (rejects outliers)
+ *
+ * Sorts a copy of the buffer, discards the lowest and highest TRIM_COUNT
+ * samples, and averages the middle portion. This prevents sensor glitches
+ * or momentary shadows from dragging the brightness down.
+ *
+ * @return Light intensity percentage (0-100)
+ */
 uint8_t LTR_329_GetLightPercent(void)
 {
-    uint32_t sum = 0;
-    uint8_t count;
-
-    /* Use all samples if buffer has been filled, otherwise use what we have */
-    if (buffer_filled) {
-        count = AVG_SAMPLES;
-    } else {
-        count = buffer_index;
-        if (count == 0) {
-            return 0;
-        }
+    if (buffer_count == 0) {
+        return 0;
     }
+
+    /* Copy buffer so we can sort without affecting the circular buffer */
+    uint8_t sorted[AVG_SAMPLES];
+    uint8_t count = buffer_count;
 
     for (uint8_t i = 0; i < count; i++) {
-        sum += light_buffer[i];
+        sorted[i] = light_buffer[i];
     }
 
-    return (uint8_t)(sum / count);
+    /* Simple insertion sort (small array, runs fast) */
+    for (uint8_t i = 1; i < count; i++) {
+        uint8_t key = sorted[i];
+        int8_t j = i - 1;
+        while (j >= 0 && sorted[j] > key) {
+            sorted[j + 1] = sorted[j];
+            j--;
+        }
+        sorted[j + 1] = key;
+    }
+
+    /*
+     * Trimmed mean: discard bottom TRIM_COUNT and top TRIM_COUNT.
+     * If we don't have enough samples yet, just use simple mean.
+     */
+    uint8_t start = 0;
+    uint8_t end = count;
+
+    if (count > (TRIM_COUNT * 2 + 3)) {
+        /* Only trim if we have enough samples to make it meaningful */
+        start = TRIM_COUNT;
+        end = count - TRIM_COUNT;
+    }
+
+    uint32_t sum = 0;
+    for (uint8_t i = start; i < end; i++) {
+        sum += sorted[i];
+    }
+
+    return (uint8_t)(sum / (end - start));
+}
+
+/**
+ * @brief Get the last raw light percent (unfiltered, for debug display)
+ * @return Most recent single-sample light percentage
+ */
+uint8_t LTR_329_GetLightPercentRaw(void)
+{
+    if (buffer_count == 0) return 0;
+
+    /* Return the most recently added sample */
+    uint8_t idx = (buffer_index == 0) ? (AVG_SAMPLES - 1) : (buffer_index - 1);
+    return light_buffer[idx];
 }
 
 uint16_t LTR_329_GetTimerPeriod(void)
 {
     uint8_t light_percent = LTR_329_GetLightPercent();
 
-    /* Map 0-100% to PERIOD_MIN-PERIOD_MAX */
-    /* At 0% light -> PERIOD_MIN (110) */
-    /* At 100% light -> PERIOD_MAX (259) */
     uint16_t period = PERIOD_MIN + ((uint32_t)(PERIOD_MAX - PERIOD_MIN) * light_percent) / 100;
 
     return period;

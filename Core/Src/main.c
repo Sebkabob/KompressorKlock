@@ -1,17 +1,11 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+*
+*	Kompressor Klock
+*	Sebastian Forenza 2026
+*
+*	Code mostly written by Claude I can't lie
+*
   *
   ******************************************************************************
   */
@@ -21,14 +15,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <string.h>
-#include <stdio.h>
 #include "matrix.h"
-#include "rtc_rv3032.h"
-#include "ltr_329.h"
-#include "sht40.h"
-#include "battery.h"
+#include "sensor_manager.h"
 #include "screens.h"
+#include "screen_impl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,10 +28,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NUM_ROWS 7
-#define NUM_COLS 84
-#define TOTAL_SR_BITS 88 // 11 chips * 8 bits
-
 extern I2C_HandleTypeDef hi2c1;
 /* USER CODE END PD */
 
@@ -56,7 +42,7 @@ I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-
+static int scroll_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,58 +57,6 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* ==================== SCREEN RENDER FUNCTIONS ====================
- *
- * Each screen is a function with signature:
- *   void my_screen(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
- *
- * It receives a zeroed buffer and draws into it using the _Buf functions.
- * The screen manager calls this each frame, so content can be dynamic.
- * Sensor data is read in the main loop and stored in globals so the
- * screen functions can access it without doing I2C reads themselves.
- */
-
-// Shared sensor data (updated in main loop, read by screen functions)
-static uint8_t g_hours, g_minutes, g_seconds;
-static int g_temp_f;
-static int g_soc;
-static int g_current_mA;
-static int g_humidity;
-static int g_voltage;
-
-// --- Screen 1: Logo ---
-void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    Matrix_DrawBitmap_Buf(buf, kompressor_logo);
-}
-
-// --- Screen 2: Time + Temp ---
-void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str[32];
-    sprintf(str, "   %02d:%02d:%02d  ", g_hours, g_minutes, g_seconds);
-    Matrix_DrawText_Buf(buf, 0, 0, str);
-}
-
-// --- Screen 3: Battery ---
-void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str[32];
-    if (g_current_mA > 0){
-        sprintf(str, "  %2d%% %3dmA  \x02  ", g_soc, g_current_mA);
-    } else {
-        sprintf(str, "  %2d%% %3dmA", g_soc, g_current_mA);
-    }
-    Matrix_DrawText_Buf(buf, 0, 0, str);
-}
-
-// --- Screen 4: Temp / Humid ---
-void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    char str[32];
-    sprintf(str, "  %2dF   %2d\x01%%", g_temp_f, g_humidity);
-    Matrix_DrawText_Buf(buf, 0, 0, str);
-}
 /* USER CODE END 0 */
 
 /**
@@ -157,113 +91,62 @@ int main(void)
   MX_TIM3_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+
+  // Initialize display
   Matrix_Init();
   HAL_TIM_Base_Start_IT(&htim3);
 
-  if (RV3032_Init(&hi2c1)) {
-      // Set initial time
-      //RV3032_SetTime(00, 58, 10, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
-  }
+  HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
 
-  if (SHT40_Init(&hi2c1)) {
-      // Sensor initialized successfully
-  }
-
-  if (LTR_329_Init(&hi2c1)) {
-      // Light sensor initialized successfully
-  }
-
-  BATTERY_Init();
+  // Initialize all sensors
+  SensorManager_Init(&hi2c1);
 
   // Initialize screen manager and register screens
   Screen_Init();
-  Screen_Register(Screen_Logo);
-  Screen_Register(Screen_Time);
-  Screen_Register(Screen_Battery);
-  Screen_Register(Screen_TempHumid);
+//  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
+  // Uncomment to enable additional screens:
+  // Screen_Register(Screen_Logo);
+  // Screen_Register(Screen_Logo2);
+  // Screen_Register(Screen_Time);
+//   Screen_Register(Screen_TimeTempHumid);
+  // Screen_Register(Screen_Battery);
+  // Screen_Register(Screen_TempHumid);
+//   Screen_Register(Screen_TimeLight);
+//   Screen_Register(Screen_TimeDate);
+//   Screen_Register(Screen_LightDebug);
+     Screen_Register(Screen_TimeTempBatt);
 
-  // Configure auto-cycle: rotates through screens with slide-left every 5s
+
   Screen_SetAutoCycle(true);
-  Screen_SetAutoCycleTransition(TRANSITION_SLIDE_UP);
+  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-//  Matrix_Fill();
-//  HAL_Delay(10000);
-
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-      static uint32_t lastLightUpdate = 0;
-      static uint32_t lastTempUpdate = 0;
-      static uint32_t lastTimeUpdate = 0;
-      static uint32_t lastBatteryUpdate = 0;
 
-      uint32_t now = HAL_GetTick();
+	    // Update all sensor readings
+	    SensorManager_Update();
 
-      // Update time every 200ms
-      if (now - lastTimeUpdate >= 200) {
-          if (RV3032_UpdateTime()) {
-              uint8_t h = RV3032_GetHours();
-              uint8_t m = RV3032_GetMinutes();
-              uint8_t s = RV3032_GetSeconds();
+	    // Mark screen dirty if sensor data changed
+	    if (SensorManager_HasChanged()) {
+	        Screen_MarkDirty();
+	    }
 
-              if (h != g_hours || m != g_minutes || s != g_seconds) {
-                  g_hours = h;
-                  g_minutes = m;
-                  g_seconds = s;
-                  Screen_MarkDirty();
-              }
-          }
-          lastTimeUpdate = now;
-      }
+	    // Keep scroll screen continuously dirty (it needs constant updates)
+	    if (Screen_GetCurrent() == scroll_screen_index) {
+	        Screen_MarkDirty();
+	    }
 
-      // Update light reading every 100ms — brightness via timer period (original approach)
-      if (now - lastLightUpdate >= 100) {
-          LTR_329_UpdateReadings();
-          lastLightUpdate = now;
+	    // Drive screen state machine
+	    Screen_Update();
 
-          uint16_t new_period = LTR_329_GetTimerPeriod();
-          __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
-      }
-
-      // Update temperature every 3 seconds
-      if (now - lastTempUpdate > 3000) {
-          SHT40_UpdateReadings();
-          int new_temp = (int)(SHT40_GetTemperatureF());
-          int new_humid = SHT40_GetHumidity();
-
-          if (new_temp != g_temp_f || new_humid != g_humidity) {
-              g_temp_f = new_temp;
-              g_humidity = new_humid;
-              Screen_MarkDirty();
-          }
-          lastTempUpdate = now;
-      }
-
-      // Update battery every 1 second
-      if (now - lastBatteryUpdate >= 1000) {
-          BATTERY_UpdateState();
-          int new_soc = BATTERY_GetSOC();
-          int new_mA = BATTERY_GetCurrent();
-          int new_v = BATTERY_GetVoltage();
-
-          if (new_soc != g_soc || new_mA != g_current_mA) {
-              g_soc = new_soc;
-              g_current_mA = new_mA;
-              g_voltage = new_v;
-              Screen_MarkDirty();
-          }
-          lastBatteryUpdate = now;
-      }
-
-      // Drive screen state machine
-      Screen_Update();
-
-      HAL_Delay(5);
+	    HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }
@@ -370,6 +253,7 @@ static void MX_TIM3_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
 
@@ -377,7 +261,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 249;
+  htim3.Init.Period = 259;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -389,15 +273,26 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_OC_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_OC_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM3_Init 2 */
-  HAL_NVIC_SetPriority(TIM3_IRQn,0,0);
-  HAL_NVIC_EnableIRQ(TIM3_IRQn);
+
   /* USER CODE END TIM3_Init 2 */
 
 }
@@ -423,6 +318,9 @@ static void MX_GPIO_Init(void)
                           |A2_Pin|A3_Pin|A4_Pin|A5_Pin
                           |A6_Pin|A7_Pin, GPIO_PIN_SET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPOUT_GPIO_Port, GPOUT_Pin, GPIO_PIN_RESET);
+
   /*Configure GPIO pins : RCLK_Pin SRCLK_Pin DATA_Pin */
   GPIO_InitStruct.Pin = RCLK_Pin|SRCLK_Pin|DATA_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -438,6 +336,25 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : ROT_B_Pin STAT1_Pin STAT2_Pin */
+  GPIO_InitStruct.Pin = ROT_B_Pin|STAT1_Pin|STAT2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : ROT_A_Pin ROT_SW_Pin */
+  GPIO_InitStruct.Pin = ROT_A_Pin|ROT_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GPOUT_Pin */
+  GPIO_InitStruct.Pin = GPOUT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPOUT_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
