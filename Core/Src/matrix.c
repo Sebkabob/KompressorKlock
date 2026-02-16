@@ -118,6 +118,14 @@ const uint8_t kompressor_logo[NUM_ROWS][TOTAL_BYTES] = {
     {0x01, 0x2e, 0x8a, 0x25, 0xdd, 0xdd, 0x20, 0x97, 0x77, 0x48, 0x00},
 };
 
+const uint8_t buy_a_wd[NUM_ROWS][TOTAL_BYTES] = {
+		0xe4, 0xa4, 0x18, 0x22, 0x67, 0x75, 0x71, 0x8e, 0x81, 0x0c, 0x60, 0x94, 0xa4, 0x24, 0x22, 0x92,
+		0x45, 0x4a, 0x50, 0x83, 0x92, 0x90, 0x94, 0xa4, 0x24, 0x22, 0x92, 0x45, 0x4a, 0x50, 0x82, 0x02,
+		0x90, 0xe4, 0x9c, 0x3c, 0x22, 0xd2, 0x47, 0x4a, 0x56, 0x83, 0x84, 0x70, 0x94, 0x84, 0x24, 0x2a,
+		0xb2, 0x45, 0x4a, 0x52, 0x80, 0x88, 0x10, 0x94, 0xa4, 0x24, 0x2a, 0x92, 0x45, 0x4a, 0x52, 0x03,
+		0x90, 0x10, 0xe7, 0x98, 0x24, 0x14, 0x92, 0x75, 0x71, 0x8e, 0x81, 0x1e, 0x10
+	};
+
 /* ================= INTERNAL HELPERS ================= */
 
 static uint8_t reverse_byte(uint8_t b)
@@ -270,4 +278,30 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
         current_row = (current_row + 1) % NUM_ROWS;
     }
+}
+
+void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
+                           const char *text, int *scroll_offset,
+                           uint32_t speed_ms, uint32_t *last_scroll_tick)
+{
+    // Advance scroll based on elapsed time
+    uint32_t now = HAL_GetTick();
+    if (now - *last_scroll_tick >= speed_ms) {
+        (*scroll_offset)++;
+        *last_scroll_tick = now;
+    }
+
+    // Calculate total pixel width of the text (6px per char: 5 + 1 gap)
+    int len = 0;
+    const char *p = text;
+    while (*p++) len++;
+    int text_width = len * 6;
+
+    // Wrap offset so it loops: text scrolls fully off left, then restarts from right
+    int total_scroll = NUM_COLS + text_width;
+    int offset = *scroll_offset % total_scroll;
+
+    // Draw at position: starts at right edge (NUM_COLS), moves left
+    int x = NUM_COLS - offset;
+    Matrix_DrawText_Buf(buf, row, x, text);
 }

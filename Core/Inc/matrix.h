@@ -9,6 +9,7 @@
 #define TOTAL_BYTES 11
 
 extern const uint8_t kompressor_logo[NUM_ROWS][TOTAL_BYTES];
+extern const uint8_t buy_a_wd[NUM_ROWS][TOTAL_BYTES];
 
 void Matrix_Init(void);
 void Matrix_Task(void);
@@ -30,5 +31,9 @@ void Matrix_LoadBuffer(const uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c);
 void Matrix_DrawText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text);
 void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t src[NUM_ROWS][TOTAL_BYTES]);
+
+void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
+                           const char *text, int *scroll_offset,
+                           uint32_t speed_ms, uint32_t *last_scroll_tick);
 
 #endif

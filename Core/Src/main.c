@@ -90,10 +90,28 @@ static int g_current_mA;
 static int g_humidity;
 static int g_voltage;
 
+static int g_scroll_offset = 0;
+static uint32_t g_scroll_tick = 0;
+
+static int scroll_screen_index = -1;
+
+void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    Matrix_ScrollText_Buf(buf, 0,
+        "IEEE is a scam! Don't give them money!",
+        &g_scroll_offset, 30, &g_scroll_tick);
+}
+
 // --- Screen 1: Logo ---
 void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     Matrix_DrawBitmap_Buf(buf, kompressor_logo);
+}
+
+// --- Screen 1: Logo ---
+void Screen_Logo2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    Matrix_DrawBitmap_Buf(buf, buy_a_wd);
 }
 
 // --- Screen 2: Time + Temp ---
@@ -109,9 +127,9 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
     if (g_current_mA > 0){
-        sprintf(str, "  %2d%% %3dmA  \x02  ", g_soc, g_current_mA);
+        sprintf(str, "  %2d%% %3dmA \x02  ", g_soc, g_current_mA);
     } else {
-        sprintf(str, "  %2d%% %3dmA", g_soc, g_current_mA);
+        sprintf(str, " %2d%% %4dmV", g_soc, g_voltage);
     }
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
@@ -162,7 +180,7 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      //RV3032_SetTime(00, 58, 10, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
+      //RV3032_SetTime(40, 49, 2, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
   }
 
   if (SHT40_Init(&hi2c1)) {
@@ -177,14 +195,15 @@ int main(void)
 
   // Initialize screen manager and register screens
   Screen_Init();
-  Screen_Register(Screen_Logo);
-  Screen_Register(Screen_Time);
+//  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
+//  Screen_Register(Screen_Logo);
+//  Screen_Register(Screen_Logo2);
+//  Screen_Register(Screen_Time);
   Screen_Register(Screen_Battery);
-  Screen_Register(Screen_TempHumid);
+//  Screen_Register(Screen_TempHumid);
 
-  // Configure auto-cycle: rotates through screens with slide-left every 5s
   Screen_SetAutoCycle(true);
-  Screen_SetAutoCycleTransition(TRANSITION_SLIDE_UP);
+  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -231,7 +250,7 @@ int main(void)
       }
 
       // Update temperature every 3 seconds
-      if (now - lastTempUpdate > 3000) {
+      if (now - lastTempUpdate > 300) {
           SHT40_UpdateReadings();
           int new_temp = (int)(SHT40_GetTemperatureF());
           int new_humid = SHT40_GetHumidity();
@@ -245,7 +264,7 @@ int main(void)
       }
 
       // Update battery every 1 second
-      if (now - lastBatteryUpdate >= 1000) {
+      if (now - lastBatteryUpdate >= 500) {
           BATTERY_UpdateState();
           int new_soc = BATTERY_GetSOC();
           int new_mA = BATTERY_GetCurrent();
@@ -262,6 +281,10 @@ int main(void)
 
       // Drive screen state machine
       Screen_Update();
+
+      if (Screen_GetCurrent() == scroll_screen_index) {
+          Screen_MarkDirty();
+      }
 
       HAL_Delay(5);
   }
@@ -377,7 +400,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 249;
+  htim3.Init.Period = 259;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -423,6 +446,9 @@ static void MX_GPIO_Init(void)
                           |A2_Pin|A3_Pin|A4_Pin|A5_Pin
                           |A6_Pin|A7_Pin, GPIO_PIN_SET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPOUT_GPIO_Port, GPOUT_Pin, GPIO_PIN_RESET);
+
   /*Configure GPIO pins : RCLK_Pin SRCLK_Pin DATA_Pin */
   GPIO_InitStruct.Pin = RCLK_Pin|SRCLK_Pin|DATA_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -438,6 +464,25 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : ROT_B_Pin STAT1_Pin STAT2_Pin */
+  GPIO_InitStruct.Pin = ROT_B_Pin|STAT1_Pin|STAT2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : ROT_A_Pin ROT_SW_Pin */
+  GPIO_InitStruct.Pin = ROT_A_Pin|ROT_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GPOUT_Pin */
+  GPIO_InitStruct.Pin = GPOUT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPOUT_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
