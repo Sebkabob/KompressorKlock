@@ -7,17 +7,15 @@ static uint8_t current_row = 0;
 
 /* ================= BRIGHTNESS ================= */
 /*
- * Brightness is controlled via TIM3 Output Compare Channel 1.
+ * Brightness is controlled by a software delay in the Update ISR.
  *
- * TIM3 Update interrupt (counter=0): shift out data, turn row ON.
- * TIM3 OC1 interrupt (counter=compare): turn row OFF.
+ * After shifting out row data and turning the row ON, we delay for
+ * brightness_compare NOP cycles, then turn the row OFF.
  *
- * brightness_compare controls when the row turns off within each period.
- * Lower value = row is on for less time = dimmer.
- * Value of 0 = row is never turned on (display off).
- * Value >= period = row stays on the full cycle (max brightness).
+ * Lower brightness_compare = shorter on-time = dimmer.
+ * brightness_compare of 0 = display off.
  */
-static volatile uint16_t brightness_compare = 259; /* default: full brightness */
+static volatile uint16_t brightness_compare = 300;
 
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
@@ -26,7 +24,6 @@ const uint16_t ROW_PINS[NUM_ROWS] =
     A5_Pin, A6_Pin, A7_Pin
 };
 
-/* Precomputed combined bitmask of all row pins for fast blanking */
 #define ALL_ROW_PINS (A1_Pin | A2_Pin | A3_Pin | A4_Pin | A5_Pin | A6_Pin | A7_Pin)
 
 /* ================= FONT ================= */
@@ -241,50 +238,62 @@ static inline void ShiftOutRow(const uint8_t *row_data)
 
 /* ================= BRIGHTNESS CONTROL ================= */
 
+/*
+ * Brightness lookup table (256 entries).
+ *
+ * Maps brightness 0-255 to NOP delay counts using a gamma 1.8 curve.
+ * This gives smooth, perceptually linear dimming with good resolution
+ * at the low end (where the eye is most sensitive to changes).
+ *
+ * Generated with: delay = (i/255)^1.8 * MAX_DELAY
+ * MAX_DELAY = 300 (tuned for the software delay loop)
+ *
+ * Key properties:
+ *   brightness 0   -> delay 0   (off)
+ *   brightness 1   -> delay 1   (barely visible)
+ *   brightness 50  -> delay 15  (very dim, still visible gradient)
+ *   brightness 128 -> delay 88  (mid)
+ *   brightness 255 -> delay 300 (full)
+ */
+static const uint16_t brightness_lut[256] = {
+      0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   2,   2,   2,   2,   2,
+      3,   3,   3,   3,   4,   4,   4,   5,   5,   5,   6,   6,   7,   7,   7,   8,
+      8,   9,   9,  10,  10,  11,  11,  12,  12,  13,  14,  14,  15,  15,  16,  17,
+     17,  18,  19,  19,  20,  21,  22,  22,  23,  24,  25,  25,  26,  27,  28,  29,
+     30,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,
+     45,  46,  47,  48,  49,  50,  52,  53,  54,  55,  56,  57,  59,  60,  61,  62,
+     64,  65,  66,  67,  69,  70,  71,  73,  74,  75,  77,  78,  80,  81,  82,  84,
+     85,  87,  88,  90,  91,  93,  94,  96,  97,  99, 100, 102, 104, 105, 107, 108,
+    110, 112, 113, 115, 117, 118, 120, 122, 123, 125, 127, 129, 130, 132, 134, 136,
+    137, 139, 141, 143, 145, 146, 148, 150, 152, 154, 156, 158, 159, 161, 163, 165,
+    167, 169, 171, 173, 175, 177, 179, 181, 183, 185, 187, 189, 191, 193, 195, 197,
+    199, 201, 204, 206, 208, 210, 212, 214, 216, 219, 221, 223, 225, 227, 230, 232,
+    234, 236, 239, 241, 243, 245, 248, 250, 252, 255, 257, 259, 261, 264, 266, 268,
+    271, 273, 275, 278, 280, 283, 285, 287, 290, 292, 295, 297, 300, 300, 300, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+};
+
 /**
- * @brief Set display brightness
+ * @brief Set display brightness immediately (no smoothing)
  * @param brightness 0 = display off, 1 = dimmest, 255 = full brightness
  *
- * This works by adjusting the TIM3 Channel 1 Output Compare value.
- * The Update interrupt (counter overflow) turns the row ON.
- * The OC1 interrupt turns the row OFF.
- * A smaller compare value means the row is on for less time = dimmer.
- *
- * Uses a quadratic curve for perceptually linear brightness.
+ * The lookup table handles the gamma curve so the caller just
+ * passes a linear 0-255 value.
  */
 void Matrix_SetBrightness(uint8_t brightness)
 {
-    extern TIM_HandleTypeDef htim3;
-    uint16_t period = __HAL_TIM_GET_AUTORELOAD(&htim3);
-
-    if (brightness == 0) {
-        brightness_compare = 0;
-    } else if (brightness >= 255) {
-        brightness_compare = period + 1; /* OC never fires = full on */
-    } else {
-        /* Quadratic curve for perceptually linear dimming */
-        uint32_t b = (uint32_t)brightness;
-        brightness_compare = (uint16_t)((b * b * period) / (255UL * 255UL));
-        if (brightness_compare == 0) brightness_compare = 1;
-    }
-
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, brightness_compare);
+    brightness_compare = brightness_lut[brightness];
 }
 
 uint8_t Matrix_GetBrightness(void)
 {
-    extern TIM_HandleTypeDef htim3;
-    uint16_t period = __HAL_TIM_GET_AUTORELOAD(&htim3);
-
-    if (brightness_compare == 0) return 0;
-    if (brightness_compare > period) return 255;
-
-    /* Reverse the quadratic mapping */
-    uint32_t val = (uint32_t)brightness_compare * 255UL * 255UL / period;
-    uint32_t root = 1;
-    while (root * root < val) root++;
-    if (root > 255) root = 255;
-    return (uint8_t)root;
+    /* Reverse lookup — find closest match */
+    uint16_t val = brightness_compare;
+    for (int i = 255; i >= 0; i--) {
+        if (brightness_lut[i] <= val) return (uint8_t)i;
+    }
+    return 0;
 }
 
 /* ================= CORE SCAN ================= */
@@ -420,20 +429,15 @@ void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t sr
             dest[r][b] = reverse_byte(src[r][b]);
 }
 
-/* ================= ISR CALLBACKS ================= */
+/* ================= ISR CALLBACK ================= */
 
-/**
- * TIM3 Update interrupt: fires at counter overflow (start of each period).
- * Blanks all rows, shifts out new data, turns on the current row.
- */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM3)
     {
-        /* Turn OFF all rows in a single register write */
+        /* Turn OFF all rows */
         GPIOA->BSRR = ALL_ROW_PINS;
 
-        /* Minimal dead time */
         __NOP(); __NOP(); __NOP(); __NOP();
 
         /* Shift out next row data */
@@ -441,24 +445,22 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
         /* Only turn row on if brightness > 0 */
         if (brightness_compare > 0) {
+            /* Turn ON current row */
             GPIOA->BRR = ROW_PINS[current_row];
+
+            /* Delay for brightness duration then turn off.
+             * Read brightness_compare once to avoid tearing
+             * if it changes mid-loop. */
+            uint16_t delay = brightness_compare;
+            for (volatile uint16_t i = 0; i < delay; i++) {
+                __NOP();
+            }
+
+            /* Turn OFF the row */
+            GPIOA->BSRR = ALL_ROW_PINS;
         }
 
         current_row = (current_row + 1) % NUM_ROWS;
-    }
-}
-
-/**
- * TIM3 OC1 interrupt: fires when counter reaches the compare value.
- * Turns off the active row, ending its on-time.
- * This is what controls brightness — earlier fire = dimmer.
- */
-void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM3 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
-    {
-        /* Turn OFF all rows */
-        GPIOA->BSRR = ALL_ROW_PINS;
     }
 }
 

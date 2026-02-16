@@ -6,7 +6,7 @@ static LTR_329_Measurement_t last_measurement = {0, 0};
 static uint8_t current_gain = LTR_329_GAIN_1X;
 
 /* Averaging buffer for smooth dimming */
-#define AVG_SAMPLES 40  /* 40 samples at 100ms = 4 seconds */
+#define AVG_SAMPLES 60  /* 60 samples at 100ms = 6 seconds */
 static uint8_t light_buffer[AVG_SAMPLES];
 static uint8_t buffer_index = 0;
 static uint8_t buffer_filled = 0;  /* Track if buffer has been filled once */
@@ -15,7 +15,7 @@ static uint8_t buffer_filled = 0;  /* Track if buffer has been filled once */
 #define LTR_329_I2C_TIMEOUT  100
 
 /* Maximum raw value for scaling (depends on gain and integration time) */
-#define LTR_329_MAX_RAW_VALUE  20  /* Adjusted for high sensitivity */
+#define LTR_329_MAX_RAW_VALUE  10  /* Adjusted for high sensitivity */
 
 /* Timer period range */
 #define PERIOD_MIN  110  /* Period at 0% light */
