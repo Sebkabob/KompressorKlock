@@ -21,7 +21,7 @@ typedef void (*ScreenRenderFunc_t)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 /* ================= CONFIGURATION ================= */
 #define MAX_SCREENS              8
-#define AUTO_CYCLE_INTERVAL_MS   3000
+#define AUTO_CYCLE_INTERVAL_MS   10000
 
 // Time-based transition speeds (in milliseconds)
 // These are constant regardless of timer period / brightness

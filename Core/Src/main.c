@@ -84,6 +84,7 @@ static void MX_I2C1_Init(void);
 
 // Shared sensor data (updated in main loop, read by screen functions)
 static uint8_t g_hours, g_minutes, g_seconds;
+static uint8_t g_hours_24;
 static int g_temp_f;
 static int g_soc;
 static int g_current_mA;
@@ -148,9 +149,58 @@ static int scroll_screen_index = -1;
 
 void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
-    Matrix_ScrollText_Buf(buf, 0,
-        "IEEE is a scam! Don't give them money!",
-        &g_scroll_offset, 30, &g_scroll_tick);
+    static char message[128];
+    static uint32_t last_update = 0;
+    uint32_t now = HAL_GetTick();
+
+    // Update message text every second to keep date/time current
+    if (now - last_update >= 1000) {
+        const char *months[] = {
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        };
+
+        const char *weekdays[] = {
+            "Sunday", "Monday", "Tuesday", "Wednesday",
+            "Thursday", "Friday", "Saturday"
+        };
+
+        const char *day_suffix[] = {
+            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 0-9
+            "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",  // 10-19
+            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 20-29
+            "th", "st"                                                     // 30-31
+        };
+
+        // Get time of day greeting
+        const char *greeting;
+        if (g_hours_24 < 12) {
+            greeting = "morning";
+        } else if (g_hours_24 < 18) {
+            greeting = "afternoon";
+        } else {
+            greeting = "evening";
+        }
+
+        // Build the scrolling message
+        sprintf(message,
+            "Today is %s, %s %d%s, %d. It is a lovely %s. "
+            "The time is %02d:%02d:%02d. Battery: %d%% Temp: %dF. Have a great day!",
+            weekdays[RV3032_GetWeekday()],
+            months[RV3032_GetMonth() - 1],
+            RV3032_GetDate(),
+            day_suffix[RV3032_GetDate()],
+            RV3032_GetYear(),
+            greeting,
+            g_hours, g_minutes, g_seconds,
+            g_soc,
+            g_temp_f
+        );
+
+        last_update = now;
+    }
+
+    Matrix_ScrollText_Buf(buf, 0, message, &g_scroll_offset, 1, &g_scroll_tick);
 }
 
 void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -194,16 +244,16 @@ void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
-//void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-//{
-//    char str1[32];
-//    sprintf(str1, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
-//    Matrix_DrawText_Buf(buf, 0, 0, str1);
-//
-//    char str2[32];
-//    sprintf(str2, "%2d\x03 %2d\x01", g_temp_f, g_humidity);
-//    Matrix_DrawTextRight_Buf(buf, 0, str2);
-//}
+void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str1[32];
+    sprintf(str1, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
+    Matrix_DrawText_Buf(buf, 0, 0, str1);
+
+    char str2[32];
+    sprintf(str2, "%2d\x03 %2d\x01", g_temp_f, g_humidity);
+    Matrix_DrawTextRight_Buf(buf, 0, str2);
+}
 
 void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
@@ -254,9 +304,8 @@ int main(void)
 
   if (RV3032_Init(&hi2c1)) {
       // Set initial time
-      //RV3032_SetTime(40, 49, 2, 5, 13, 2, 2026);  // sec, min, hr, weekday, date, month, year
+	  //RV3032_SetTime(10, 03, 22, 0, 15, 2, 2026);  // sec, min, hr, weekday, date, month, year  }
   }
-
   if (SHT40_Init(&hi2c1)) {
       // Sensor initialized successfully
   }
@@ -269,14 +318,14 @@ int main(void)
 
   // Initialize screen manager and register screens
   Screen_Init();
-//  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
+  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
 //  Screen_Register(Screen_Logo);
 //  Screen_Register(Screen_Logo2);
 //  Screen_Register(Screen_Time);
 //  Screen_Register(Screen_TimeTempHumid);
 //  Screen_Register(Screen_Battery);
 //  Screen_Register(Screen_TempHumid);
-  Screen_Register(Screen_TimeLight);
+//  Screen_Register(Screen_TimeLight);
 
   Screen_SetAutoCycle(true);
   Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
@@ -304,12 +353,16 @@ int main(void)
       // Update time every 200ms
       if (now - lastTimeUpdate >= 200) {
           if (RV3032_UpdateTime()) {
-              uint8_t h = RV3032_GetHours();
+              uint8_t h_12 = RV3032_GetHours();  // 12-hour format for display
               uint8_t m = RV3032_GetMinutes();
               uint8_t s = RV3032_GetSeconds();
 
-              if (h != g_hours || m != g_minutes || s != g_seconds) {
-                  g_hours = h;
+              // Get raw 24-hour value for logic (greeting, etc.)
+              uint8_t h_24 = RV3032_BCDtoDEC(RV3032_ReadRegister(RV3032_HOURS));
+
+              if (h_12 != g_hours || m != g_minutes || s != g_seconds) {
+                  g_hours = h_12;      // Store 12-hour for display
+                  g_hours_24 = h_24;   // Store 24-hour for logic
                   g_minutes = m;
                   g_seconds = s;
                   Screen_MarkDirty();
@@ -378,10 +431,6 @@ int main(void)
           }
           lastChargerCheck = now;
       }
-
-//      char str[32];
-//      sprintf(str, "            \x02");
-//      Matrix_DrawText_Buf(buf, 0, 0, str);
 
       // Drive screen state machine
       Screen_Update();
