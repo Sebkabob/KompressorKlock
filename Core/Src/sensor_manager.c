@@ -8,11 +8,6 @@
 #include <string.h>
 
 /* ================= CHARGER STATUS (BQ25120) ================= */
-// STAT1=HIGH, STAT2=HIGH -> Charge complete / sleep / disabled
-// STAT1=HIGH, STAT2=LOW  -> Normal charging in progress
-// STAT1=LOW,  STAT2=HIGH -> Recoverable fault (OVP, TS, etc.)
-// STAT1=LOW,  STAT2=LOW  -> Non-recoverable latch-off fault
-
 typedef enum {
     CHARGER_COMPLETE_OR_DISABLED,
     CHARGER_CHARGING,
@@ -20,25 +15,94 @@ typedef enum {
     CHARGER_FAULT_LATCHOFF
 } ChargerStatus_t;
 
+/* ================= BRIGHTNESS BREAKPOINT MAP ================= */
+/*
+ * Tunable brightness curve using breakpoints.
+ *
+ * Each entry maps a light_percent to a brightness value (0-255).
+ * The system linearly interpolates between adjacent breakpoints.
+ *
+ * To tune: adjust the brightness values to taste.
+ * - Lower brightness values = dimmer at that light level
+ * - The light_percent values define the "zones"
+ *
+ * Example: if your room at night reads ~5% light and you want the
+ * display barely visible, set the first breakpoint brightness low.
+ * If normal room lighting reads ~40%, set that breakpoint to your
+ * preferred "comfortable reading" brightness.
+ */
+typedef struct {
+    uint8_t light_percent;   /* Input: filtered light level (0-100) */
+    uint8_t brightness;      /* Output: display brightness (0-255) */
+} BrightnessBreakpoint_t;
+
+#define NUM_BREAKPOINTS 5
+
+static const BrightnessBreakpoint_t brightness_map[NUM_BREAKPOINTS] = {
+    /*  light%   brightness
+     *  ------   ----------  */
+    {    0,         1  },   /* Pitch dark: very dim but still readable */
+    {   6,         70  },   /* Dark room (nighttime, lights off nearby) */
+    {   14,        95  },   /* Dim room (evening, indirect lighting) */
+    {   35,       150  },   /* Normal room (daytime, overhead lights) */
+    {  100,       255  },   /* Bright (direct light, window, lamp nearby) */
+};
+
+/**
+ * @brief Map light percent to brightness using breakpoint interpolation
+ * @param light_pct Filtered light percentage (0-100)
+ * @return Brightness value (0-255)
+ */
+static uint8_t map_brightness(uint8_t light_pct)
+{
+    /* Below first breakpoint */
+    if (light_pct <= brightness_map[0].light_percent) {
+        return brightness_map[0].brightness;
+    }
+
+    /* Above last breakpoint */
+    if (light_pct >= brightness_map[NUM_BREAKPOINTS - 1].light_percent) {
+        return brightness_map[NUM_BREAKPOINTS - 1].brightness;
+    }
+
+    /* Find which two breakpoints we're between */
+    for (int i = 0; i < NUM_BREAKPOINTS - 1; i++) {
+        uint8_t x0 = brightness_map[i].light_percent;
+        uint8_t x1 = brightness_map[i + 1].light_percent;
+
+        if (light_pct >= x0 && light_pct <= x1) {
+            /* Linear interpolation between breakpoints */
+            uint8_t y0 = brightness_map[i].brightness;
+            uint8_t y1 = brightness_map[i + 1].brightness;
+
+            uint16_t result = y0 + ((uint16_t)(y1 - y0) * (light_pct - x0)) / (x1 - x0);
+            return (uint8_t)result;
+        }
+    }
+
+    /* Shouldn't reach here, but return max as fallback */
+    return brightness_map[NUM_BREAKPOINTS - 1].brightness;
+}
+
 /* ================= BRIGHTNESS SMOOTHING ================= */
 /*
- * We smooth brightness transitions to prevent glitchy jumps.
+ * Smooth transitions between brightness levels to prevent flicker.
  *
- * target_brightness: where the light sensor wants us to be (0-255)
- * current_brightness_x16: fixed-point (4 fractional bits) actual brightness
+ * target_brightness: where the breakpoint map wants us (0-255)
+ * current_brightness_x16: fixed-point (4 fractional bits) for smooth steps
  *
- * Every 30ms we move current toward target by 1/8 of the difference.
- * This gives a smooth ~200ms fade that looks natural.
- * Using fixed-point avoids rounding to zero when the step is small.
+ * Every SMOOTH_INTERVAL_MS we move 1/SMOOTH_DIVISOR toward target.
  */
-#define BRIGHTNESS_MIN       5     /* minimum visible brightness */
-#define BRIGHTNESS_MAX       220   /* max brightness (LUT saturates above this) */
-#define SMOOTH_INTERVAL_MS   30    /* how often we step toward target */
-#define SMOOTH_DIVISOR       8     /* larger = slower fade (1/N of difference per step) */
+#define SMOOTH_INTERVAL_MS   30    /* How often we step toward target */
+#define SMOOTH_DIVISOR       8     /* Larger = slower fade */
 
-static int16_t target_brightness = BRIGHTNESS_MAX;
-static int16_t current_brightness_x16 = (int16_t)BRIGHTNESS_MAX << 4;
+static int16_t target_brightness = 220;
+static int16_t current_brightness_x16 = (int16_t)220 << 4;
 static uint32_t last_smooth_tick = 0;
+
+/* Debug: expose current mapped brightness for the debug screen */
+static uint8_t debug_mapped_brightness = 0;
+static uint8_t debug_current_brightness = 0;
 
 /* ================= PRIVATE STATE ================= */
 static SensorData_t sensor_data = {0};
@@ -85,7 +149,6 @@ static void update_time(void)
         sensor_data.minutes = RV3032_GetMinutes();
         sensor_data.seconds = RV3032_GetSeconds();
 
-        // Get 24-hour format for logic/calculations
         sensor_data.hours_24 = RV3032_BCDtoDEC(RV3032_ReadRegister(RV3032_HOURS));
     }
 }
@@ -109,26 +172,17 @@ static void update_light(void)
     static uint32_t last_sensor_read = 0;
     uint32_t now = HAL_GetTick();
 
-    /* --- Read light sensor every 100ms and set target brightness --- */
+    /* --- Read light sensor every 100ms --- */
     if (now - last_sensor_read >= 100) {
         LTR_329_UpdateReadings();
         last_sensor_read = now;
 
-        int light = LTR_329_GetLightPercent();
+        /* Get filtered light level and map through breakpoints */
+        uint8_t light = LTR_329_GetLightPercent();
+        uint8_t mapped = map_brightness(light);
 
-        /*
-         * Map light sensor (0-100%) to brightness (BRIGHTNESS_MIN - BRIGHTNESS_MAX).
-         * Linear mapping is fine here because the gamma LUT in matrix.c
-         * handles the perceptual correction.
-         */
-        if (light <= 0) {
-            target_brightness = BRIGHTNESS_MIN;
-        } else if (light >= 100) {
-            target_brightness = BRIGHTNESS_MAX;
-        } else {
-            target_brightness = BRIGHTNESS_MIN +
-                (light * (BRIGHTNESS_MAX - BRIGHTNESS_MIN)) / 100;
-        }
+        target_brightness = mapped;
+        debug_mapped_brightness = mapped;
     }
 
     /* --- Smooth brightness toward target every SMOOTH_INTERVAL_MS --- */
@@ -139,16 +193,14 @@ static void update_light(void)
         int16_t diff = target_x16 - current_brightness_x16;
 
         if (diff == 0) {
-            /* Already at target, nothing to do */
+            /* Already at target */
         } else if (diff > 0) {
-            /* Getting brighter */
             int16_t step = diff / SMOOTH_DIVISOR;
-            if (step < 1) step = 1;  /* always make progress */
+            if (step < 1) step = 1;
             current_brightness_x16 += step;
             if (current_brightness_x16 > target_x16)
                 current_brightness_x16 = target_x16;
         } else {
-            /* Getting dimmer */
             int16_t step = (-diff) / SMOOTH_DIVISOR;
             if (step < 1) step = 1;
             current_brightness_x16 -= step;
@@ -156,8 +208,8 @@ static void update_light(void)
                 current_brightness_x16 = target_x16;
         }
 
-        /* Convert fixed-point back to 0-255 and apply */
         uint8_t brightness = (uint8_t)(current_brightness_x16 >> 4);
+        debug_current_brightness = brightness;
         Matrix_SetBrightness(brightness);
     }
 
@@ -196,31 +248,21 @@ void SensorManager_Init(I2C_HandleTypeDef *hi2c)
 {
     hi2c_handle = hi2c;
 
-    // Initialize RTC
-    if (RV3032_Init(hi2c)) {
-        // Uncomment to set initial time:
-        // RV3032_SetTime(0, 0, 12, 0, 15, 2, 2026);
-    }
-
-    // Initialize temperature/humidity sensor
+    RV3032_Init(hi2c);
     SHT40_Init(hi2c);
-
-    // Initialize light sensor
     LTR_329_Init(hi2c);
-
-    // Initialize battery gauge
     BATTERY_Init();
 
-    // Initialize sensor data
     memset(&sensor_data, 0, sizeof(sensor_data));
     memset(&prev_data, 0, sizeof(prev_data));
     data_changed = false;
 
-    // Initialize brightness to a sensible default
-    target_brightness = BRIGHTNESS_MAX;
-    current_brightness_x16 = (int16_t)BRIGHTNESS_MAX << 4;
+    /* Start at the bright end of the map */
+    uint8_t initial = brightness_map[NUM_BREAKPOINTS - 1].brightness;
+    target_brightness = initial;
+    current_brightness_x16 = (int16_t)initial << 4;
     last_smooth_tick = HAL_GetTick();
-    Matrix_SetBrightness(BRIGHTNESS_MAX);
+    Matrix_SetBrightness(initial);
 }
 
 void SensorManager_Update(void)
@@ -241,6 +283,18 @@ const SensorData_t* SensorManager_GetData(void)
 bool SensorManager_HasChanged(void)
 {
     bool changed = data_changed;
-    data_changed = false;  // Clear flag after reading
+    data_changed = false;
     return changed;
+}
+
+/* ================= DEBUG ACCESSORS ================= */
+
+uint8_t SensorManager_GetMappedBrightness(void)
+{
+    return debug_mapped_brightness;
+}
+
+uint8_t SensorManager_GetCurrentBrightness(void)
+{
+    return debug_current_brightness;
 }

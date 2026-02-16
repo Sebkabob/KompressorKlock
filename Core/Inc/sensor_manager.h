@@ -31,27 +31,23 @@ typedef struct {
 
 /* ================= PUBLIC API ================= */
 
-/**
- * @brief Initialize all sensors
- * @param hi2c Pointer to I2C handle
- */
 void SensorManager_Init(I2C_HandleTypeDef *hi2c);
-
-/**
- * @brief Update all sensor readings (call from main loop)
- */
 void SensorManager_Update(void);
-
-/**
- * @brief Get pointer to current sensor data
- * @return Pointer to sensor data structure (read-only)
- */
 const SensorData_t* SensorManager_GetData(void);
+bool SensorManager_HasChanged(void);
+
+/* ================= DEBUG ACCESSORS ================= */
 
 /**
- * @brief Check if sensor data has changed since last check
- * @return true if data changed, false otherwise
+ * @brief Get the brightness value from breakpoint mapping (before smoothing)
+ * @return Target brightness (0-255)
  */
-bool SensorManager_HasChanged(void);
+uint8_t SensorManager_GetMappedBrightness(void);
+
+/**
+ * @brief Get the actual current brightness (after smoothing)
+ * @return Current brightness (0-255)
+ */
+uint8_t SensorManager_GetCurrentBrightness(void);
 
 #endif // SENSOR_MANAGER_H

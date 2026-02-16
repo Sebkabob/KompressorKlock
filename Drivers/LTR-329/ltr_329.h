@@ -72,73 +72,14 @@ typedef struct {
 
 /* Function Prototypes */
 
-/**
- * @brief Initialize the LTR-329 sensor
- * @param hi2c Pointer to I2C handle
- * @return true if initialization successful, false otherwise
- */
 bool LTR_329_Init(I2C_HandleTypeDef *hi2c);
-
-/**
- * @brief Set the gain of the sensor
- * @param hi2c Pointer to I2C handle
- * @param gain Gain setting
- * @return true if successful
- */
 bool LTR_329_SetGain(I2C_HandleTypeDef *hi2c, LTR_329_Gain_t gain);
-
-/**
- * @brief Set the integration time
- * @param hi2c Pointer to I2C handle
- * @param time Integration time setting
- * @return true if successful
- */
 bool LTR_329_SetIntegrationTime(I2C_HandleTypeDef *hi2c, LTR_329_IntTime_t time);
-
-/**
- * @brief Set the measurement rate
- * @param hi2c Pointer to I2C handle
- * @param rate Measurement rate setting
- * @return true if successful
- */
 bool LTR_329_SetMeasurementRate(I2C_HandleTypeDef *hi2c, LTR_329_MeasRate_t rate);
-
-/**
- * @brief Set device mode (active/standby)
- * @param hi2c Pointer to I2C handle
- * @param mode Device mode
- * @return true if successful
- */
 bool LTR_329_SetMode(I2C_HandleTypeDef *hi2c, LTR_329_Mode_t mode);
-
-/**
- * @brief Read raw measurement data from both channels
- * @param hi2c Pointer to I2C handle
- * @param measurement Pointer to measurement structure
- * @return true if successful
- */
 bool LTR_329_ReadMeasurement(I2C_HandleTypeDef *hi2c, LTR_329_Measurement_t *measurement);
-
-/**
- * @brief Read device status
- * @param hi2c Pointer to I2C handle
- * @param status Pointer to status structure
- * @return true if successful
- */
 bool LTR_329_ReadStatus(I2C_HandleTypeDef *hi2c, LTR_329_Status_t *status);
-
-/**
- * @brief Read Part ID
- * @param hi2c Pointer to I2C handle
- * @return Part ID or 0 on error
- */
 uint8_t LTR_329_ReadPartID(I2C_HandleTypeDef *hi2c);
-
-/**
- * @brief Read Manufacturer ID
- * @param hi2c Pointer to I2C handle
- * @return Manufacturer ID (should be 0x05) or 0 on error
- */
 uint8_t LTR_329_ReadManufacturerID(I2C_HandleTypeDef *hi2c);
 
 /**
@@ -148,27 +89,24 @@ uint8_t LTR_329_ReadManufacturerID(I2C_HandleTypeDef *hi2c);
 bool LTR_329_UpdateReadings(void);
 
 /**
- * @brief Get light intensity as percentage (0-100), averaged over 3 seconds
+ * @brief Get light intensity as percentage (0-100), trimmed-mean filtered
  * @return Light intensity percentage
  */
 uint8_t LTR_329_GetLightPercent(void);
 
 /**
- * @brief Get timer period based on averaged light level
+ * @brief Get the most recent unfiltered light percentage (for debug)
+ * @return Raw single-sample light percentage
+ */
+uint8_t LTR_329_GetLightPercentRaw(void);
+
+/**
+ * @brief Get timer period based on averaged light level (legacy)
  * @return Timer period (110 at 0% light, 259 at 100% light)
  */
 uint16_t LTR_329_GetTimerPeriod(void);
 
-/**
- * @brief Get raw Channel 0 value
- * @return Channel 0 raw value
- */
 uint16_t LTR_329_GetChannel0(void);
-
-/**
- * @brief Get raw Channel 1 value
- * @return Channel 1 raw value
- */
 uint16_t LTR_329_GetChannel1(void);
 
 #endif /* LTR_329_H */

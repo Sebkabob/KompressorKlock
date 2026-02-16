@@ -1,6 +1,7 @@
 #include "screen_impl.h"
 #include "sensor_manager.h"
 #include "rtc_rv3032.h"
+#include "ltr_329.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
@@ -37,24 +38,20 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     };
 
     const char *day_suffix[] = {
-        "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 0-9
-        "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",  // 10-19
-        "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 20-29
-        "th", "st"                                                     // 30-31
+        "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",
+        "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",
+        "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",
+        "th", "st"
     };
 
-    // Determine AM/PM
     char am_pm = (data->hours_24 < 12) ? 'a' : 'p';
 
-    // Format time (hours:minutes + AM/PM indicator)
     sprintf(time_str, "%02d:%02d%c", data->hours_12, data->minutes, am_pm);
 
-    // Format date (e.g., "Sun 15th")
     uint8_t weekday = RV3032_GetWeekday();
     uint8_t date = RV3032_GetDate();
     sprintf(date_str, "%s %d%s", weekdays_short[weekday], date, day_suffix[date]);
 
-    // Draw time on left, date on right
     Matrix_DrawText_Buf(buf, 0, 0, time_str);
     Matrix_DrawTextRight_Buf(buf, 0, date_str);
 }
@@ -64,16 +61,13 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     const SensorData_t *data = SensorManager_GetData();
     char str[32];
 
-    // Show fault warning if charger has a problem
     if (data->charger_fault_latchoff) {
         sprintf(str, "CHG FAULT!");
     } else if (data->charger_fault_recoverable) {
         sprintf(str, "CHG WARN!");
     } else if (data->current_mA >= 0) {
-        // Charging (with lightning bolt character)
         sprintf(str, "%2d%% %3dmA \x02", data->soc_percent, data->current_mA);
     } else {
-        // Discharging
         sprintf(str, "%2d%% %3dmA", data->soc_percent, data->current_mA);
     }
 
@@ -115,6 +109,68 @@ void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawTextRight_Buf(buf, 0, str2);
 }
 
+void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    const SensorData_t *data = SensorManager_GetData();
+    char str1[32];
+    char str2[32];
+
+    sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
+    Matrix_DrawText_Buf(buf, 0, 0, str1);
+
+    sprintf(str2, "%2d\x03 %2d%%", data->temp_f, data->soc_percent);
+    Matrix_DrawTextRight_Buf(buf, 0, str2);
+}
+
+/**
+ * @brief Debug screen for tuning brightness — page 0 and page 1.
+ *
+ * Alternates every 2 seconds between two views:
+ *
+ * Page 0: "R:xx F:xx M:xxx B:xxx"
+ *   R = Raw single-sample light %
+ *   F = Filtered (trimmed mean) light %
+ *   M = Mapped brightness (from breakpoint table)
+ *   B = actual Brightness (after smoothing)
+ *
+ * Page 1: "C0:xxxxx C1:xxxxx"
+ *   C0 = Raw channel 0 (visible + IR) from sensor
+ *   C1 = Raw channel 1 (IR only) from sensor
+ *   These are the actual 16-bit ADC counts — use them to
+ *   calibrate LTR_329_MAX_RAW_VALUE and sensor gain.
+ */
+void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    static uint32_t last_page_switch = 0;
+    static uint8_t page = 0;
+    char str[48];
+
+    uint32_t now = HAL_GetTick();
+    if (now - last_page_switch >= 2000) {
+        page = (page + 1) % 2;
+        last_page_switch = now;
+    }
+
+    if (page == 0) {
+        uint8_t raw = LTR_329_GetLightPercentRaw();
+        uint8_t filtered = LTR_329_GetLightPercent();
+        uint8_t mapped = SensorManager_GetMappedBrightness();
+        uint8_t actual = SensorManager_GetCurrentBrightness();
+
+        sprintf(str, "%02d %02d", raw, filtered);
+        Matrix_DrawText_Buf(buf, 0, 0, str);
+
+        sprintf(str, "%03d %03d", mapped, actual);
+        Matrix_DrawTextRight_Buf(buf, 0, str);
+    } else {
+        uint16_t ch0 = LTR_329_GetChannel0();
+        uint16_t ch1 = LTR_329_GetChannel1();
+
+        sprintf(str, "%05u %05u", ch0, ch1);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
+    }
+}
+
 void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     static char message[128];
@@ -125,7 +181,6 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     const SensorData_t *data = SensorManager_GetData();
     uint32_t now = HAL_GetTick();
 
-    // Update message text every second to keep date/time current
     if (now - last_update >= 1000) {
         const char *months[] = {
             "January", "February", "March", "April", "May", "June",
@@ -138,13 +193,12 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         };
 
         const char *day_suffix[] = {
-            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 0-9
-            "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",  // 10-19
-            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",  // 20-29
-            "th", "st"                                                     // 30-31
+            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",
+            "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",
+            "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",
+            "th", "st"
         };
 
-        // Get time of day greeting
         const char *greeting;
         if (data->hours_24 < 12) {
             greeting = "morning";
@@ -154,7 +208,6 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
             greeting = "evening";
         }
 
-        // Build the scrolling message
         sprintf(message,
             "Today is %s, %s %d%s, %d. It is a lovely %s. "
             "The time is %02d:%02d:%02d. Battery: %d%% Temp: %dF. Have a great day!",
