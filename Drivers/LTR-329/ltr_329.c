@@ -15,11 +15,11 @@ static uint8_t buffer_filled = 0;  /* Track if buffer has been filled once */
 #define LTR_329_I2C_TIMEOUT  100
 
 /* Maximum raw value for scaling (depends on gain and integration time) */
-#define LTR_329_MAX_RAW_VALUE  40  /* Adjusted for high sensitivity */
+#define LTR_329_MAX_RAW_VALUE  20  /* Adjusted for high sensitivity */
 
 /* Timer period range */
 #define PERIOD_MIN  110  /* Period at 0% light */
-#define PERIOD_MAX  259  /* Period at 100% light */
+#define PERIOD_MAX  269  /* Period at 100% light */
 
 /* Private function prototypes */
 static bool LTR_329_WriteRegister(I2C_HandleTypeDef *hi2c, uint8_t reg, uint8_t value);

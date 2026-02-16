@@ -19,6 +19,7 @@ static const uint8_t font5x7[128][5] =
 
 [0x01] = {0x38, 0x44, 0x43, 0x44, 0x38}, //water drop
 [0x02] = {0x08, 0x6c, 0x3e, 0x1b, 0x08}, //bolt
+[0x03] = {0x07, 0x05, 0x07, 0x00, 0x00}, //degree
 
 [':'] = {0x00, 0x36, 0x36, 0x00, 0x00},
 [';'] = {0x00, 0x56, 0x36, 0x00, 0x00},
@@ -147,6 +148,55 @@ static void set_pixel_buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int r, int c, uint
         buf[r][byte] &= ~(1 << bit);
 }
 
+/* ================= PROPORTIONAL FONT HELPERS ================= */
+
+/**
+ * @brief Get the proportional width of a character (trimmed columns + 1px gap)
+ * @param c Character to measure
+ * @return Width in pixels including 1px trailing gap
+ *         Space returns 2 (1px wide + 1px gap)
+ */
+static int char_width(char c)
+{
+    // Space: 1 pixel wide + 1 pixel gap = 2
+    if (c == ' ') return 2;
+
+    // Keep '1' full width so digits stay aligned in numeric displays
+    if (c == '1') return 6;
+
+    const uint8_t *glyph = font5x7[(int)(unsigned char)c];
+
+    // Find first and last non-zero columns
+    int first = -1, last = -1;
+    for (int x = 0; x < 5; x++) {
+        if (glyph[x] != 0) {
+            if (first < 0) first = x;
+            last = x;
+        }
+    }
+
+    // Empty glyph (undefined char) — treat like space
+    if (first < 0) return 2;
+
+    // Width of glyph pixels + 1px inter-character gap
+    return (last - first + 1) + 1;
+}
+
+/**
+ * @brief Get the total pixel width of a string (proportional)
+ * @param text Null-terminated string
+ * @return Total width in pixels (includes trailing gap of last char)
+ */
+static int text_pixel_width(const char *text)
+{
+    int w = 0;
+    while (*text) {
+        w += char_width(*text);
+        text++;
+    }
+    return w;
+}
+
 /* ================= SHIFT ================= */
 static void ShiftOutRow(uint8_t *row_data)
 {
@@ -210,7 +260,7 @@ void Matrix_ScrollText(const char *text, int offset)
     int x = -offset;
     while (*text) {
         Matrix_DrawChar(0, x, *text);
-        x += 6;
+        x += char_width(*text);
         text++;
     }
 }
@@ -229,11 +279,49 @@ void Matrix_LoadBuffer(const uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c)
 {
-    for (int x = 0; x < 5; x++) {
-        uint8_t column = font5x7[(int)c][x];
-        for (int y = 0; y < 7; y++) {
-            set_pixel_buf(buf, row + y, col + x, (column >> y) & 1);
+    // Space: just a 1px gap (nothing to draw)
+    if (c == ' ') return;
+
+    const uint8_t *glyph = font5x7[(int)(unsigned char)c];
+
+    // Keep '1' full width — draw all 5 columns untrimmed
+    if (c == '1') {
+        for (int x = 0; x < 5; x++) {
+            uint8_t column = glyph[x];
+            for (int y = 0; y < 7; y++) {
+                set_pixel_buf(buf, row + y, col + x, (column >> y) & 1);
+            }
         }
+        return;
+    }
+
+    // Find first non-zero column
+    int first = -1;
+    for (int x = 0; x < 5; x++) {
+        if (glyph[x] != 0) {
+            first = x;
+            break;
+        }
+    }
+    if (first < 0) return; // Empty glyph
+
+    // Find last non-zero column
+    int last = first;
+    for (int x = 4; x >= first; x--) {
+        if (glyph[x] != 0) {
+            last = x;
+            break;
+        }
+    }
+
+    // Draw only the trimmed columns
+    int draw_col = col;
+    for (int x = first; x <= last; x++) {
+        uint8_t column = glyph[x];
+        for (int y = 0; y < 7; y++) {
+            set_pixel_buf(buf, row + y, draw_col, (column >> y) & 1);
+        }
+        draw_col++;
     }
 }
 
@@ -241,9 +329,23 @@ void Matrix_DrawText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, c
 {
     while (*text) {
         Matrix_DrawChar_Buf(buf, row, col, *text);
-        col += 6;
+        col += char_width(*text);
         text++;
     }
+}
+
+void Matrix_DrawTextCentered_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, const char *text)
+{
+    int w = text_pixel_width(text);
+    int col = (NUM_COLS - w) / 2;
+    Matrix_DrawText_Buf(buf, row, col, text);
+}
+
+void Matrix_DrawTextRight_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, const char *text)
+{
+    int w = text_pixel_width(text);
+    int col = NUM_COLS - w;
+    Matrix_DrawText_Buf(buf, row, col, text);
 }
 
 void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t src[NUM_ROWS][TOTAL_BYTES])
@@ -291,11 +393,8 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
         *last_scroll_tick = now;
     }
 
-    // Calculate total pixel width of the text (6px per char: 5 + 1 gap)
-    int len = 0;
-    const char *p = text;
-    while (*p++) len++;
-    int text_width = len * 6;
+    // Calculate total pixel width of the text (proportional)
+    int text_width = text_pixel_width(text);
 
     // Wrap offset so it loops: text scrolls fully off left, then restarts from right
     int total_scroll = NUM_COLS + text_width;

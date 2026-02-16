@@ -89,6 +89,7 @@ static int g_soc;
 static int g_current_mA;
 static int g_humidity;
 static int g_voltage;
+static int g_light;
 
 // Charger status from BQ25120 STAT1/STAT2 pins
 // STAT1=HIGH, STAT2=HIGH -> Charge complete / sleep / disabled (VBAT > VRCH)
@@ -152,62 +153,67 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         &g_scroll_offset, 30, &g_scroll_tick);
 }
 
-// --- Screen 1: Logo ---
 void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     Matrix_DrawBitmap_Buf(buf, kompressor_logo);
 }
 
-// --- Screen 1: Logo ---
 void Screen_Logo2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     Matrix_DrawBitmap_Buf(buf, buy_a_wd);
 }
 
-// --- Screen 2: Time + Temp ---
 void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-    sprintf(str, "   %02d:%02d:%02d  ", g_hours, g_minutes, g_seconds);
-    Matrix_DrawText_Buf(buf, 0, 0, str);
+    sprintf(str, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
-//// --- Screen 3: Battery ---
-//void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-//{
-//    char str[32];
-//    if (g_current_mA > 0){
-//        sprintf(str, "  %2d%% %3dmA \x02  ", g_soc, g_current_mA);
-//    } else {
-//        sprintf(str, " %2d%% %4dmV", g_soc, g_voltage);
-//    }
-//    Matrix_DrawText_Buf(buf, 0, 0, str);
-//}
-
-// --- Screen 3: Battery ---
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
 
     // Show fault warning if charger has a problem
     if (g_charger_fault_latchoff) {
-        sprintf(str, " CHG FAULT!");
+        sprintf(str, "CHG FAULT!");
     } else if (g_charger_fault_recoverable) {
-        sprintf(str, " CHG WARN! ");
-    } else if (g_current_mA > 0) {
-        sprintf(str, "  %2d%% %3dmA \x02  ", g_soc, g_current_mA);
+        sprintf(str, "CHG WARN!");
+    } else if (g_current_mA >= 0) {
+        sprintf(str, "%2d%% %3dmA \x02", g_soc, g_current_mA);
     } else {
-        sprintf(str, " %2d%% %4dmV", g_soc, g_voltage);
+        sprintf(str, "%2d%% %3dmA", g_soc, g_current_mA);
     }
-    Matrix_DrawText_Buf(buf, 0, 0, str);
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
-// --- Screen 4: Temp / Humid ---
 void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
     sprintf(str, "  %2dF   %2d\x01%%", g_temp_f, g_humidity);
     Matrix_DrawText_Buf(buf, 0, 0, str);
+}
+
+//void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+//{
+//    char str1[32];
+//    sprintf(str1, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
+//    Matrix_DrawText_Buf(buf, 0, 0, str1);
+//
+//    char str2[32];
+//    sprintf(str2, "%2d\x03 %2d\x01", g_temp_f, g_humidity);
+//    Matrix_DrawTextRight_Buf(buf, 0, str2);
+//}
+
+void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str1[32];
+    sprintf(str1, "%02d:%02d:%02d", g_hours, g_minutes, g_seconds);
+    Matrix_DrawText_Buf(buf, 0, 0, str1);
+
+    char str2[32];
+    sprintf(str2, "%2d%%", g_light);
+    Matrix_DrawTextRight_Buf(buf, 0, str2);
 }
 /* USER CODE END 0 */
 
@@ -267,8 +273,10 @@ int main(void)
 //  Screen_Register(Screen_Logo);
 //  Screen_Register(Screen_Logo2);
 //  Screen_Register(Screen_Time);
-  Screen_Register(Screen_Battery);
+//  Screen_Register(Screen_TimeTempHumid);
+//  Screen_Register(Screen_Battery);
 //  Screen_Register(Screen_TempHumid);
+  Screen_Register(Screen_TimeLight);
 
   Screen_SetAutoCycle(true);
   Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
@@ -285,6 +293,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
       static uint32_t lastLightUpdate = 0;
+      static uint32_t lastLightUpdate2 = 0;
       static uint32_t lastTempUpdate = 0;
       static uint32_t lastTimeUpdate = 0;
       static uint32_t lastBatteryUpdate = 0;
@@ -316,7 +325,17 @@ int main(void)
 
           uint16_t new_period = LTR_329_GetTimerPeriod();
           __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
+
+          g_light = LTR_329_GetLightPercent();
       }
+
+      // Update light reading every 77ms
+      if (now - lastLightUpdate2 >= 77) {
+          lastLightUpdate2 = now;
+
+          g_light = LTR_329_GetLightPercent();
+      }
+
 
       // Update temperature every 3 seconds
       if (now - lastTempUpdate > 300) {
@@ -359,6 +378,10 @@ int main(void)
           }
           lastChargerCheck = now;
       }
+
+//      char str[32];
+//      sprintf(str, "            \x02");
+//      Matrix_DrawText_Buf(buf, 0, 0, str);
 
       // Drive screen state machine
       Screen_Update();
