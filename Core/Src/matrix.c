@@ -5,6 +5,20 @@
 static uint8_t display_buffer[NUM_ROWS][TOTAL_BYTES];
 static uint8_t current_row = 0;
 
+/* ================= BRIGHTNESS ================= */
+/*
+ * Brightness is controlled via TIM3 Output Compare Channel 1.
+ *
+ * TIM3 Update interrupt (counter=0): shift out data, turn row ON.
+ * TIM3 OC1 interrupt (counter=compare): turn row OFF.
+ *
+ * brightness_compare controls when the row turns off within each period.
+ * Lower value = row is on for less time = dimmer.
+ * Value of 0 = row is never turned on (display off).
+ * Value >= period = row stays on the full cycle (max brightness).
+ */
+static volatile uint16_t brightness_compare = 259; /* default: full brightness */
+
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
 {
@@ -153,23 +167,13 @@ static void set_pixel_buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int r, int c, uint
 
 /* ================= PROPORTIONAL FONT HELPERS ================= */
 
-/**
- * @brief Get the proportional width of a character (trimmed columns + 1px gap)
- * @param c Character to measure
- * @return Width in pixels including 1px trailing gap
- *         Space returns 2 (1px wide + 1px gap)
- */
 static int char_width(char c)
 {
-    // Space: 1 pixel wide + 1 pixel gap = 2
     if (c == ' ') return 2;
-
-    // Keep '1' full width so digits stay aligned in numeric displays
     if (c == '1') return 6;
 
     const uint8_t *glyph = font5x7[(int)(unsigned char)c];
 
-    // Find first and last non-zero columns
     int first = -1, last = -1;
     for (int x = 0; x < 5; x++) {
         if (glyph[x] != 0) {
@@ -178,18 +182,10 @@ static int char_width(char c)
         }
     }
 
-    // Empty glyph (undefined char) — treat like space
     if (first < 0) return 2;
-
-    // Width of glyph pixels + 1px inter-character gap
     return (last - first + 1) + 1;
 }
 
-/**
- * @brief Get the total pixel width of a string (proportional)
- * @param text Null-terminated string
- * @return Total width in pixels (includes trailing gap of last char)
- */
 static int text_pixel_width(const char *text)
 {
     int w = 0;
@@ -202,23 +198,12 @@ static int text_pixel_width(const char *text)
 
 /* ================= OPTIMIZED SHIFT ================= */
 
-/**
- * @brief Shift out one row of display data via bit-bang at maximum speed.
- *
- * Uses direct BSRR/BRR register writes instead of HAL_GPIO_WritePin
- * for ~8-10x speedup. Processes data byte-at-a-time with unrolled
- * inner loops to eliminate per-bit division and modulo.
- *
- * All pins (DATA=PA2, SRCLK=PA1, RCLK=PA0) are on GPIOA.
- */
 static inline void ShiftOutRow(const uint8_t *row_data)
 {
     GPIO_TypeDef *port = GPIOA;
-    const uint32_t data_pin = DATA_Pin;    /* PA2 = 0x0004 */
-    const uint32_t clk_pin  = SRCLK_Pin;   /* PA1 = 0x0002 */
+    const uint32_t data_pin = DATA_Pin;
+    const uint32_t clk_pin  = SRCLK_Pin;
 
-    /* Macro: set data line, pulse clock — one column per invocation.
-     * LED logic is inverted: bit=1 means pull DATA low (BRR). */
     #define SHIFT_BIT(byte_val, bit_n)          \
         if ((byte_val) & (1u << (bit_n)))       \
             port->BRR  = data_pin;              \
@@ -227,7 +212,6 @@ static inline void ShiftOutRow(const uint8_t *row_data)
         port->BSRR = clk_pin;                   \
         port->BRR  = clk_pin;
 
-    /* Bytes 0–9: 8 bits each = 80 columns */
     for (int b = 0; b < 10; b++)
     {
         uint8_t v = row_data[b];
@@ -241,7 +225,6 @@ static inline void ShiftOutRow(const uint8_t *row_data)
         SHIFT_BIT(v, 7)
     }
 
-    /* Byte 10: only 4 bits (cols 80–83) */
     {
         uint8_t v = row_data[10];
         SHIFT_BIT(v, 0)
@@ -252,9 +235,56 @@ static inline void ShiftOutRow(const uint8_t *row_data)
 
     #undef SHIFT_BIT
 
-    /* Latch: pulse RCLK */
     port->BSRR = RCLK_Pin;
     port->BRR  = RCLK_Pin;
+}
+
+/* ================= BRIGHTNESS CONTROL ================= */
+
+/**
+ * @brief Set display brightness
+ * @param brightness 0 = display off, 1 = dimmest, 255 = full brightness
+ *
+ * This works by adjusting the TIM3 Channel 1 Output Compare value.
+ * The Update interrupt (counter overflow) turns the row ON.
+ * The OC1 interrupt turns the row OFF.
+ * A smaller compare value means the row is on for less time = dimmer.
+ *
+ * Uses a quadratic curve for perceptually linear brightness.
+ */
+void Matrix_SetBrightness(uint8_t brightness)
+{
+    extern TIM_HandleTypeDef htim3;
+    uint16_t period = __HAL_TIM_GET_AUTORELOAD(&htim3);
+
+    if (brightness == 0) {
+        brightness_compare = 0;
+    } else if (brightness >= 255) {
+        brightness_compare = period + 1; /* OC never fires = full on */
+    } else {
+        /* Quadratic curve for perceptually linear dimming */
+        uint32_t b = (uint32_t)brightness;
+        brightness_compare = (uint16_t)((b * b * period) / (255UL * 255UL));
+        if (brightness_compare == 0) brightness_compare = 1;
+    }
+
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, brightness_compare);
+}
+
+uint8_t Matrix_GetBrightness(void)
+{
+    extern TIM_HandleTypeDef htim3;
+    uint16_t period = __HAL_TIM_GET_AUTORELOAD(&htim3);
+
+    if (brightness_compare == 0) return 0;
+    if (brightness_compare > period) return 255;
+
+    /* Reverse the quadratic mapping */
+    uint32_t val = (uint32_t)brightness_compare * 255UL * 255UL / period;
+    uint32_t root = 1;
+    while (root * root < val) root++;
+    if (root > 255) root = 255;
+    return (uint8_t)root;
 }
 
 /* ================= CORE SCAN ================= */
@@ -319,12 +349,10 @@ void Matrix_LoadBuffer(const uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c)
 {
-    // Space: just a 1px gap (nothing to draw)
     if (c == ' ') return;
 
     const uint8_t *glyph = font5x7[(int)(unsigned char)c];
 
-    // Keep '1' full width — draw all 5 columns untrimmed
     if (c == '1') {
         for (int x = 0; x < 5; x++) {
             uint8_t column = glyph[x];
@@ -335,7 +363,6 @@ void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, c
         return;
     }
 
-    // Find first non-zero column
     int first = -1;
     for (int x = 0; x < 5; x++) {
         if (glyph[x] != 0) {
@@ -343,9 +370,8 @@ void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, c
             break;
         }
     }
-    if (first < 0) return; // Empty glyph
+    if (first < 0) return;
 
-    // Find last non-zero column
     int last = first;
     for (int x = 4; x >= first; x--) {
         if (glyph[x] != 0) {
@@ -354,7 +380,6 @@ void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, c
         }
     }
 
-    // Draw only the trimmed columns
     int draw_col = col;
     for (int x = first; x <= last; x++) {
         uint8_t column = glyph[x];
@@ -395,7 +420,12 @@ void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t sr
             dest[r][b] = reverse_byte(src[r][b]);
 }
 
-/* ================= ISR CALLBACK (optimized) ================= */
+/* ================= ISR CALLBACKS ================= */
+
+/**
+ * TIM3 Update interrupt: fires at counter overflow (start of each period).
+ * Blanks all rows, shifts out new data, turns on the current row.
+ */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM3)
@@ -403,16 +433,32 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         /* Turn OFF all rows in a single register write */
         GPIOA->BSRR = ALL_ROW_PINS;
 
-        /* Minimal dead time — a few NOPs for row transistors to switch off */
+        /* Minimal dead time */
         __NOP(); __NOP(); __NOP(); __NOP();
 
         /* Shift out next row data */
         ShiftOutRow(display_buffer[current_row]);
 
-        /* Turn ON current row (direct register write) */
-        GPIOA->BRR = ROW_PINS[current_row];
+        /* Only turn row on if brightness > 0 */
+        if (brightness_compare > 0) {
+            GPIOA->BRR = ROW_PINS[current_row];
+        }
 
         current_row = (current_row + 1) % NUM_ROWS;
+    }
+}
+
+/**
+ * TIM3 OC1 interrupt: fires when counter reaches the compare value.
+ * Turns off the active row, ending its on-time.
+ * This is what controls brightness — earlier fire = dimmer.
+ */
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM3 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+    {
+        /* Turn OFF all rows */
+        GPIOA->BSRR = ALL_ROW_PINS;
     }
 }
 
@@ -420,21 +466,17 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
                            const char *text, int *scroll_offset,
                            uint32_t speed_ms, uint32_t *last_scroll_tick)
 {
-    // Advance scroll based on elapsed time
     uint32_t now = HAL_GetTick();
     if (now - *last_scroll_tick >= speed_ms) {
         (*scroll_offset)++;
         *last_scroll_tick = now;
     }
 
-    // Calculate total pixel width of the text (proportional)
     int text_width = text_pixel_width(text);
 
-    // Wrap offset so it loops: text scrolls fully off left, then restarts from right
     int total_scroll = NUM_COLS + text_width;
     int offset = *scroll_offset % total_scroll;
 
-    // Draw at position: starts at right edge (NUM_COLS), moves left
     int x = NUM_COLS - offset;
     Matrix_DrawText_Buf(buf, row, x, text);
 }

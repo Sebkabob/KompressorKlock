@@ -27,6 +27,10 @@ void Matrix_DrawBitmap(const uint8_t bitmap[NUM_ROWS][TOTAL_BYTES]);
 // Load a pre-rendered buffer directly into the display buffer
 void Matrix_LoadBuffer(const uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
+// Brightness control (0 = off, 1 = dimmest, 255 = full brightness)
+void Matrix_SetBrightness(uint8_t brightness);
+uint8_t Matrix_GetBrightness(void);
+
 // Draw into an arbitrary buffer (for offscreen rendering by screens.c)
 void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c);
 void Matrix_DrawText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text);

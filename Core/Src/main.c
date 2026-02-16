@@ -96,6 +96,8 @@ int main(void)
   Matrix_Init();
   HAL_TIM_Base_Start_IT(&htim3);
 
+  HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
+
   // Initialize all sensors
   SensorManager_Init(&hi2c1);
 
@@ -109,8 +111,8 @@ int main(void)
   // Screen_Register(Screen_TimeTempHumid);
   // Screen_Register(Screen_Battery);
   // Screen_Register(Screen_TempHumid);
-  // Screen_Register(Screen_TimeLight);
-   Screen_Register(Screen_TimeDate);
+   Screen_Register(Screen_TimeLight);
+//   Screen_Register(Screen_TimeDate);
 
   Screen_SetAutoCycle(true);
   Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
@@ -126,7 +128,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
 	    // Update all sensor readings
-	    //SensorManager_Update();
+	    SensorManager_Update();
 
 	    // Mark screen dirty if sensor data changed
 	    if (SensorManager_HasChanged()) {
@@ -248,14 +250,15 @@ static void MX_TIM3_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 159; //159
+  htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 15; //259
+  htim3.Init.Period = 259;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -267,15 +270,26 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_OC_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_OC_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM3_Init 2 */
-  HAL_NVIC_SetPriority(TIM3_IRQn,0,0);
-  HAL_NVIC_EnableIRQ(TIM3_IRQn);
+
   /* USER CODE END TIM3_Init 2 */
 
 }

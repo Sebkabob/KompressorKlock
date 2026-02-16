@@ -3,6 +3,7 @@
 #include "ltr_329.h"
 #include "sht40.h"
 #include "battery.h"
+#include "matrix.h"
 #include "main.h"
 #include <string.h>
 
@@ -85,20 +86,43 @@ static void update_temperature(void)
 static void update_light(void)
 {
     static uint32_t last_update = 0;
-    static uint32_t last_period_update = 0;
+    static uint32_t last_brightness_update = 0;
     uint32_t now = HAL_GetTick();
 
-    // Update timer period for brightness control every 100ms
-    if (now - last_period_update >= 100) {
+    // Update brightness from light sensor every 100ms
+    if (now - last_brightness_update >= 100) {
         LTR_329_UpdateReadings();
-        last_period_update = now;
+        last_brightness_update = now;
 
-        extern TIM_HandleTypeDef htim3;
-        uint16_t new_period = LTR_329_GetTimerPeriod();
-        __HAL_TIM_SET_AUTORELOAD(&htim3, new_period);
+        /*
+         * Map light sensor to brightness (0-255).
+         *
+         * You'll want to tune this mapping to your light sensor's range.
+         * LTR_329_GetLightPercent() returns 0-100.
+         *
+         * Example mapping:
+         *   0% light  ->  brightness 3   (very dim but still visible)
+         *   100% light -> brightness 255  (full brightness)
+         *
+         * The quadratic curve inside Matrix_SetBrightness() already handles
+         * perceptual linearity, so a linear mapping here works well.
+         */
+        int light = LTR_329_GetLightPercent();
+
+        /* Linear map: light 0-100 -> brightness 3-255 */
+        uint8_t brightness;
+        if (light <= 0) {
+            brightness = 3;   /* minimum visible brightness */
+        } else if (light >= 100) {
+            brightness = 255;
+        } else {
+            brightness = (uint8_t)(3 + (light * 252) / 100);
+        }
+
+        Matrix_SetBrightness(brightness);
     }
 
-    // Update light percentage every 77ms
+    // Update light percentage for display every 77ms
     if (now - last_update >= 77) {
         last_update = now;
         sensor_data.light_percent = LTR_329_GetLightPercent();
