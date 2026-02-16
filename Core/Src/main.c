@@ -126,7 +126,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
 	    // Update all sensor readings
-	    SensorManager_Update();
+	    //SensorManager_Update();
 
 	    // Mark screen dirty if sensor data changed
 	    if (SensorManager_HasChanged()) {
@@ -253,9 +253,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 159;
+  htim3.Init.Prescaler = 159; //159
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 259;
+  htim3.Init.Period = 15; //259
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)

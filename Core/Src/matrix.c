@@ -12,6 +12,9 @@ const uint16_t ROW_PINS[NUM_ROWS] =
     A5_Pin, A6_Pin, A7_Pin
 };
 
+/* Precomputed combined bitmask of all row pins for fast blanking */
+#define ALL_ROW_PINS (A1_Pin | A2_Pin | A3_Pin | A4_Pin | A5_Pin | A6_Pin | A7_Pin)
+
 /* ================= FONT ================= */
 static const uint8_t font5x7[128][5] =
 {
@@ -197,24 +200,61 @@ static int text_pixel_width(const char *text)
     return w;
 }
 
-/* ================= SHIFT ================= */
-static void ShiftOutRow(uint8_t *row_data)
+/* ================= OPTIMIZED SHIFT ================= */
+
+/**
+ * @brief Shift out one row of display data via bit-bang at maximum speed.
+ *
+ * Uses direct BSRR/BRR register writes instead of HAL_GPIO_WritePin
+ * for ~8-10x speedup. Processes data byte-at-a-time with unrolled
+ * inner loops to eliminate per-bit division and modulo.
+ *
+ * All pins (DATA=PA2, SRCLK=PA1, RCLK=PA0) are on GPIOA.
+ */
+static inline void ShiftOutRow(const uint8_t *row_data)
 {
-    for (int col = 0; col < 84; col++)
+    GPIO_TypeDef *port = GPIOA;
+    const uint32_t data_pin = DATA_Pin;    /* PA2 = 0x0004 */
+    const uint32_t clk_pin  = SRCLK_Pin;   /* PA1 = 0x0002 */
+
+    /* Macro: set data line, pulse clock — one column per invocation.
+     * LED logic is inverted: bit=1 means pull DATA low (BRR). */
+    #define SHIFT_BIT(byte_val, bit_n)          \
+        if ((byte_val) & (1u << (bit_n)))       \
+            port->BRR  = data_pin;              \
+        else                                    \
+            port->BSRR = data_pin;              \
+        port->BSRR = clk_pin;                   \
+        port->BRR  = clk_pin;
+
+    /* Bytes 0–9: 8 bits each = 80 columns */
+    for (int b = 0; b < 10; b++)
     {
-        int byte = col / 8;
-        int bit  = col % 8;
-        uint8_t val = (row_data[byte] >> bit) & 1;
-
-        HAL_GPIO_WritePin(GPIOA, DATA_Pin,
-            val ? GPIO_PIN_RESET : GPIO_PIN_SET);
-
-        HAL_GPIO_WritePin(GPIOA, SRCLK_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(GPIOA, SRCLK_Pin, GPIO_PIN_RESET);
+        uint8_t v = row_data[b];
+        SHIFT_BIT(v, 0)
+        SHIFT_BIT(v, 1)
+        SHIFT_BIT(v, 2)
+        SHIFT_BIT(v, 3)
+        SHIFT_BIT(v, 4)
+        SHIFT_BIT(v, 5)
+        SHIFT_BIT(v, 6)
+        SHIFT_BIT(v, 7)
     }
 
-    HAL_GPIO_WritePin(GPIOA, RCLK_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOA, RCLK_Pin, GPIO_PIN_RESET);
+    /* Byte 10: only 4 bits (cols 80–83) */
+    {
+        uint8_t v = row_data[10];
+        SHIFT_BIT(v, 0)
+        SHIFT_BIT(v, 1)
+        SHIFT_BIT(v, 2)
+        SHIFT_BIT(v, 3)
+    }
+
+    #undef SHIFT_BIT
+
+    /* Latch: pulse RCLK */
+    port->BSRR = RCLK_Pin;
+    port->BRR  = RCLK_Pin;
 }
 
 /* ================= CORE SCAN ================= */
@@ -355,28 +395,22 @@ void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t sr
             dest[r][b] = reverse_byte(src[r][b]);
 }
 
-/* ================= ISR CALLBACK (original, unchanged) ================= */
+/* ================= ISR CALLBACK (optimized) ================= */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM3)
     {
-        // Turn OFF all rows
-        for (int r = 0; r < NUM_ROWS; r++)
-        {
-            HAL_GPIO_WritePin(GPIOA, ROW_PINS[r], GPIO_PIN_SET);
-        }
+        /* Turn OFF all rows in a single register write */
+        GPIOA->BSRR = ALL_ROW_PINS;
 
-        // Short dead time (prevents ghosting)
-        for (volatile int i = 0; i < 20; i++) { __NOP(); }
+        /* Minimal dead time — a few NOPs for row transistors to switch off */
+        __NOP(); __NOP(); __NOP(); __NOP();
 
-        // Shift out next row data
+        /* Shift out next row data */
         ShiftOutRow(display_buffer[current_row]);
 
-        // Stabilize latches
-        for (volatile int i = 0; i < 10; i++) { __NOP(); }
-
-        // Turn ON current row
-        HAL_GPIO_WritePin(GPIOA, ROW_PINS[current_row], GPIO_PIN_RESET);
+        /* Turn ON current row (direct register write) */
+        GPIOA->BRR = ROW_PINS[current_row];
 
         current_row = (current_row + 1) % NUM_ROWS;
     }
