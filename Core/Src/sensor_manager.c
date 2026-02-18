@@ -141,7 +141,7 @@ static void update_time(void)
     static uint32_t last_update = 0;
     uint32_t now = HAL_GetTick();
 
-    if (now - last_update < 200) return;
+    if (now - last_update < 50) return;
     last_update = now;
 
     if (RV3032_UpdateTime()) {
@@ -158,7 +158,7 @@ static void update_temperature(void)
     static uint32_t last_update = 0;
     uint32_t now = HAL_GetTick();
 
-    if (now - last_update < 300) return;
+    if (now - last_update < 100) return;
     last_update = now;
 
     SHT40_UpdateReadings();
