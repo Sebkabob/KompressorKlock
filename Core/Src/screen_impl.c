@@ -74,6 +74,16 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
+void Screen_Battery2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    const SensorData_t *data = SensorManager_GetData();
+    char str[32];
+
+    sprintf(str, "%3dmA %4dmV %2d%%", data->current_mA, data->voltage_mV, data->soc_percent);
+
+    Matrix_DrawText_Buf(buf, 0, 0, str);
+}
+
 void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
