@@ -46,6 +46,11 @@ static const BrightnessBreakpoint_t brightness_map[NUM_BREAKPOINTS] = {
     {   14,        95  },   /* Dim room (evening, indirect lighting) */
     {   35,       150  },   /* Normal room (daytime, overhead lights) */
     {  100,       255  },   /* Bright (direct light, window, lamp nearby) */
+//	    {    0,         1  },   /* Pitch dark: very dim but still readable */
+//	    {   2,         70  },   /* Dark room (nighttime, lights off nearby) */
+//	    {   6,        120  },   /* Dim room (evening, indirect lighting) */
+//	    {   8,       190  },   /* Normal room (daytime, overhead lights) */
+//	    {  12,       255  },   /* Bright (direct light, window, lamp nearby) */
 };
 
 /**
@@ -162,8 +167,32 @@ static void update_temperature(void)
     last_update = now;
 
     SHT40_UpdateReadings();
-    sensor_data.temp_f = (int)SHT40_GetTemperatureF();
-    sensor_data.humidity = SHT40_GetHumidity();
+
+    /*
+     * Hysteresis: only update the displayed integer when the float
+     * reading has moved more than the threshold away from the current
+     * displayed value. This prevents rapid flickering when the true
+     * value sits near X.5 (e.g., 70.5°F toggling between 70 and 71).
+     *
+     * A threshold of 0.5 means:
+     *   - Displaying 70 → stays 70 until raw reaches 70.5 or 69.5
+     *   - Then snaps to 71 (or 69) and stays until it drifts 0.5 away again
+     */
+    #define TEMP_HYSTERESIS  0.5f
+    #define HUM_HYSTERESIS   0.5f
+
+    float raw_temp_f = SHT40_GetTemperatureF();
+    float raw_humidity = SHT40_GetHumidity();
+
+    float temp_diff = raw_temp_f - (float)sensor_data.temp_f;
+    if (temp_diff > TEMP_HYSTERESIS || temp_diff < -TEMP_HYSTERESIS) {
+        sensor_data.temp_f = (int)raw_temp_f;
+    }
+
+    float hum_diff = raw_humidity - (float)sensor_data.humidity;
+    if (hum_diff > HUM_HYSTERESIS || hum_diff < -HUM_HYSTERESIS) {
+        sensor_data.humidity = (int)raw_humidity;
+    }
 }
 
 static void update_light(void)
