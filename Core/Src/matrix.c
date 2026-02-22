@@ -7,19 +7,37 @@ static volatile uint8_t current_row = 0;
 
 /* ================= BRIGHTNESS ================= */
 /*
- * Brightness is now controlled via TIM3 Output Compare Channel 1.
+ * Brightness via TIM3 Output Compare — zero CPU spinning.
  *
- * TIM3 Update interrupt (counter overflow) → shift out data, turn ON row
- * TIM3 CC1 interrupt (compare match)       → turn OFF row
+ * Timer config: prescaler=15, ARR=999 → 1 MHz clock, 1 ms period
+ * Frame rate: 1 MHz / 1000 / 7 rows = ~143 Hz (was ~55 Hz)
  *
- * The compare value (CCR1) determines how long the row stays lit.
- * Higher CCR1 = longer on-time = brighter.  CCR1 = 0 means OFF.
- * CCR1 must be <= ARR (period).
+ * TIMING PER ROW PERIOD (1 ms):
+ *   1. Update interrupt (UIF, counter=0):
+ *      → All rows OFF (blanking)
+ *      → Shift out new row data (~60-70 µs)
+ *      → Turn row ON
+ *   2. Compare interrupt (CC1IF, counter=CCR1):
+ *      → Turn row OFF
  *
- * This replaces the old NOP spin-loop, freeing the CPU and allowing
- * much higher refresh rates.
+ * SHIFT_OVERHEAD (80 ticks = 80 µs at 1 MHz):
+ *   The shift-out takes ~60-70 µs. All CCR1 values in the LUT are
+ *   offset above SHIFT_OVERHEAD so the compare event ALWAYS fires
+ *   AFTER the row has been turned on. This prevents the glitch where
+ *   a small CCR1 would fire before the row was lit, leaving it on
+ *   for the entire period (bright flash).
+ *
+ *   brightness=0:   row never turns on (special case in ISR)
+ *   brightness=1:   CCR1=81 → on for 1 µs after shift completes
+ *   brightness=255: CCR1=999 → on for full period (919 µs)
  */
-static volatile uint16_t brightness_compare = 300;
+
+/* Must match MX_TIM3_Init() values in main.c */
+#define TIMER_ARR        999
+#define SHIFT_OVERHEAD    80
+
+static volatile uint16_t brightness_ccr = TIMER_ARR; /* current CCR1 value */
+static volatile uint8_t  brightness_off = 0;          /* 1 = display off   */
 
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
@@ -240,65 +258,39 @@ static inline void ShiftOutRow(const uint8_t *row_data)
     port->BRR  = RCLK_Pin;
 }
 
-/* ================= BRIGHTNESS CONTROL ================= */
-
+/* ================= BRIGHTNESS LUT ================= */
 /*
- * Brightness lookup table (256 entries).
+ * Gamma 1.8 curve, 256 entries.
+ * Maps brightness 0-255 → TIM3 CCR1 values.
  *
- * Maps brightness 0-255 to TIM3 CCR1 compare values.
- * The timer ARR (period) is set to 399, so max compare = 399.
+ * All non-zero entries are >= SHIFT_OVERHEAD+1 to guarantee the
+ * compare event fires AFTER the shift-out + row-on sequence.
+ * This eliminates the bright-flash glitch at low brightness.
  *
- * Using gamma 1.8 curve for perceptually linear dimming.
- * At 16 MHz with prescaler 7, one timer tick = 0.5 µs.
- * Period of 399 → 200 µs per row → 714 Hz per row → ~102 Hz frame.
+ * Entry 0 = 0 (special: row never turns on).
+ * Entry 255 = 999 = ARR (full period, maximum brightness).
  *
- * But the shift-out takes ~60 µs, so effective on-time range is
- * CCR1 values from ~120 (shift overhead) up to 399 (full period).
- * We map brightness 0→0 (row never turns on), 1→shift_overhead,
- * 255→399 (full period).
- *
- * Actually, brightness is simpler: we keep the NOP-delay approach
- * but with a scaled-down LUT since the period is shorter.
- * OR we use the compare interrupt. Let's use the compare interrupt.
- *
- * NEW APPROACH:
- *   - Update interrupt (UIF): all rows OFF, shift out data, turn row ON
- *   - Compare interrupt (CC1IF): turn row OFF
- *   - CCR1 value controls on-time = brightness
- *   - No CPU spinning!
- *
- * The LUT maps 0-255 → 0 to ARR (timer period value).
- * brightness 0 = row never turns on
- * brightness 255 = row stays on for full period
- */
-
-/* Timer period — set to match MX_TIM3_Init in main.c */
-#define TIMER_ARR 399
-
-/*
- * Gamma 1.8 LUT mapping brightness 0-255 → CCR1 value 0..TIMER_ARR
- * Generated with: ccr = (i/255)^1.8 * TIMER_ARR
- * Entry 0 is forced to 0 (display off).
- *
- * This is recalculated for ARR=399.
+ * Generated with:
+ *   ccr = SHIFT_OVERHEAD + 1 + (i/255)^1.8 * (ARR - SHIFT_OVERHEAD)
+ *   clamped to [0, ARR]
  */
 static const uint16_t brightness_lut[256] = {
-      0,   1,   1,   1,   1,   1,   2,   2,   2,   2,   3,   3,   3,   4,   4,   4,
-      5,   5,   6,   6,   7,   7,   8,   8,   9,   9,  10,  10,  11,  12,  12,  13,
-     14,  14,  15,  16,  17,  17,  18,  19,  20,  21,  21,  22,  23,  24,  25,  26,
-     27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  40,  41,  42,  43,
-     44,  46,  47,  48,  49,  51,  52,  53,  55,  56,  58,  59,  60,  62,  63,  65,
-     66,  68,  69,  71,  72,  74,  76,  77,  79,  80,  82,  84,  85,  87,  89,  91,
-     92,  94,  96,  98,  99, 101, 103, 105, 107, 109, 111, 113, 115, 117, 119, 121,
-    123, 125, 127, 129, 131, 133, 135, 137, 139, 141, 144, 146, 148, 150, 152, 155,
-    157, 159, 161, 164, 166, 168, 171, 173, 175, 178, 180, 183, 185, 188, 190, 192,
-    195, 197, 200, 202, 205, 208, 210, 213, 215, 218, 221, 223, 226, 229, 231, 234,
-    237, 239, 242, 245, 248, 250, 253, 256, 259, 262, 264, 267, 270, 273, 276, 279,
-    282, 285, 288, 291, 294, 297, 300, 303, 306, 309, 312, 315, 318, 321, 325, 328,
-    331, 334, 337, 340, 344, 347, 350, 353, 357, 360, 363, 367, 370, 373, 377, 380,
-    383, 387, 390, 394, 397, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399,
-    399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399,
-    399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399, 399,
+       0,  81,  81,  81,  81,  81,  82,  82,  82,  83,  83,  84,  84,  85,  85,  86,
+      87,  88,  88,  89,  90,  91,  92,  93,  94,  95,  96,  97,  98,  99, 100, 101,
+     102, 104, 105, 106, 108, 109, 110, 112, 113, 115, 116, 118, 119, 121, 123, 124,
+     126, 128, 129, 131, 133, 135, 137, 139, 141, 142, 144, 146, 148, 151, 153, 155,
+     157, 159, 161, 163, 166, 168, 170, 173, 175, 177, 180, 182, 184, 187, 189, 192,
+     195, 197, 200, 202, 205, 208, 210, 213, 216, 219, 221, 224, 227, 230, 233, 236,
+     239, 242, 245, 248, 251, 254, 257, 260, 263, 267, 270, 273, 276, 280, 283, 286,
+     289, 293, 296, 300, 303, 307, 310, 314, 317, 321, 324, 328, 332, 335, 339, 343,
+     346, 350, 354, 358, 361, 365, 369, 373, 377, 381, 385, 389, 393, 397, 401, 405,
+     409, 413, 417, 421, 426, 430, 434, 438, 443, 447, 451, 456, 460, 464, 469, 473,
+     478, 482, 487, 491, 496, 500, 505, 509, 514, 519, 523, 528, 533, 538, 542, 547,
+     552, 557, 562, 567, 571, 576, 581, 586, 591, 596, 601, 606, 611, 617, 622, 627,
+     632, 637, 642, 648, 653, 658, 663, 669, 674, 679, 685, 690, 696, 701, 706, 712,
+     717, 723, 728, 734, 740, 745, 751, 756, 762, 768, 774, 779, 785, 791, 797, 802,
+     808, 814, 820, 826, 832, 838, 844, 850, 856, 862, 868, 874, 880, 886, 892, 898,
+     904, 911, 917, 923, 929, 936, 942, 948, 955, 961, 967, 974, 980, 987, 993, 993,
 };
 
 /**
@@ -307,14 +299,21 @@ static const uint16_t brightness_lut[256] = {
  */
 void Matrix_SetBrightness(uint8_t brightness)
 {
-    brightness_compare = brightness_lut[brightness];
-    /* Update the compare register directly — takes effect next cycle */
-    TIM3->CCR1 = brightness_compare;
+    if (brightness == 0) {
+        brightness_off = 1;
+        brightness_ccr = 0;
+        TIM3->CCR1 = 0;
+    } else {
+        brightness_off = 0;
+        brightness_ccr = brightness_lut[brightness];
+        TIM3->CCR1 = brightness_ccr;
+    }
 }
 
 uint8_t Matrix_GetBrightness(void)
 {
-    uint16_t val = brightness_compare;
+    if (brightness_off) return 0;
+    uint16_t val = brightness_ccr;
     for (int i = 255; i >= 0; i--) {
         if (brightness_lut[i] <= val) return (uint8_t)i;
     }
@@ -324,8 +323,7 @@ uint8_t Matrix_GetBrightness(void)
 /* ================= CORE SCAN ================= */
 void Matrix_Task(void)
 {
-    /* No longer used — display is driven entirely by TIM3 ISR.
-     * Kept as a no-op for API compatibility. */
+    /* No longer used — display driven entirely by TIM3 ISR. */
 }
 
 /* ================= DRAW (display buffer) ================= */
@@ -443,44 +441,45 @@ void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t sr
             dest[r][b] = reverse_byte(src[r][b]);
 }
 
-/* ================= TIM3 ISR — DIRECTLY CALLED, NO HAL ================= */
+/* ================= TIM3 ISR — DIRECT REGISTER ACCESS, NO HAL ================= */
 /*
- * This replaces HAL_TIM_PeriodElapsedCallback entirely.
- * Called directly from TIM3_IRQHandler (see stm32g0xx_it.c).
+ * Called from TIM3_IRQHandler() in stm32g0xx_it.c (bypasses HAL).
  *
- * Two interrupt sources from TIM3:
- *   UIF  (update/overflow)  → advance row, shift data, turn ON
- *   CC1IF (compare match)   → turn OFF row
+ * UIF  (update/overflow) → blank all rows, shift data, turn ON row
+ * CC1IF (compare match)  → turn OFF row (brightness cutoff)
+ *
+ * CC1 always fires AFTER the shift completes because all LUT values
+ * are >= SHIFT_OVERHEAD. At brightness=255, CCR1=ARR=999 so CC1IF
+ * fires right at the overflow boundary — row stays on full period.
  */
-
 void Matrix_TIM3_IRQHandler(void)
 {
     uint32_t sr = TIM3->SR;
 
-    /* ---- Compare match: turn OFF the row ---- */
-    if (sr & TIM_SR_CC1IF) {
-        TIM3->SR = ~TIM_SR_CC1IF;          /* Clear CC1 flag */
-        GPIOA->BSRR = ALL_ROW_PINS;        /* All rows OFF (active low → set high) */
-    }
-
-    /* ---- Update (overflow): advance to next row, shift data, turn ON ---- */
+    /* ---- Update (overflow): advance row, shift data, turn ON ---- */
     if (sr & TIM_SR_UIF) {
-        TIM3->SR = ~TIM_SR_UIF;            /* Clear update flag */
+        TIM3->SR = ~TIM_SR_UIF;
 
-        /* All rows OFF first (blanking) */
+        /* Blank all rows immediately */
         GPIOA->BSRR = ALL_ROW_PINS;
 
-        /* Shift out the data for the current row */
+        /* Shift out data for current row */
         ShiftOutRow(display_buffer[current_row]);
 
-        /* Turn ON current row if brightness > 0 */
-        if (brightness_compare > 0) {
+        /* Turn ON current row (unless brightness is zero) */
+        if (!brightness_off) {
             GPIOA->BRR = ROW_PINS[current_row];
         }
 
-        /* Advance to next row for the NEXT interrupt */
+        /* Advance to next row */
         current_row++;
         if (current_row >= NUM_ROWS) current_row = 0;
+    }
+
+    /* ---- Compare match: turn OFF the row ---- */
+    if (sr & TIM_SR_CC1IF) {
+        TIM3->SR = ~TIM_SR_CC1IF;
+        GPIOA->BSRR = ALL_ROW_PINS;
     }
 }
 

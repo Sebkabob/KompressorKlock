@@ -172,14 +172,14 @@ static void update_temperature(void)
      * Hysteresis: only update the displayed integer when the float
      * reading has moved more than the threshold away from the current
      * displayed value. This prevents rapid flickering when the true
-     * value sits near X.5 (e.g., 70.5°F toggling between 70 and 71).
+     * value sits near X.25 (e.g., 70.5°F toggling between 70 and 71).
      *
      * A threshold of 0.5 means:
-     *   - Displaying 70 → stays 70 until raw reaches 70.5 or 69.5
-     *   - Then snaps to 71 (or 69) and stays until it drifts 0.5 away again
+     *   - Displaying 70 → stays 70 until raw reaches 70.25 or 69.75
+     *   - Then snaps to 71 (or 69) and stays until it drifts 0.25 away again
      */
-    #define TEMP_HYSTERESIS  0.5f
-    #define HUM_HYSTERESIS   0.5f
+    #define TEMP_HYSTERESIS  0.25f
+    #define HUM_HYSTERESIS   0.25f
 
     float raw_temp_f = SHT40_GetTemperatureF();
     float raw_humidity = SHT40_GetHumidity();
@@ -298,8 +298,8 @@ void SensorManager_Update(void)
 {
     update_time();
     update_temperature();
-//    update_light();
-    Matrix_SetBrightness(255);
+    update_light();
+//    Matrix_SetBrightness(255);
     update_battery();
     update_charger_status();
     check_if_changed();
