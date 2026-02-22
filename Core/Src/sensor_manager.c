@@ -298,7 +298,8 @@ void SensorManager_Update(void)
 {
     update_time();
     update_temperature();
-    update_light();
+//    update_light();
+    Matrix_SetBrightness(100);
     update_battery();
     update_charger_status();
     check_if_changed();

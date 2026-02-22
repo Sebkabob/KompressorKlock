@@ -110,10 +110,10 @@ int main(void)
   // Screen_Register(Screen_Time);
 //   Screen_Register(Screen_TimeTempHumid);
 //   Screen_Register(Screen_Battery);
-  Screen_Register(Screen_Battery2);
+//  Screen_Register(Screen_Battery2);
   // Screen_Register(Screen_TempHumid);
 //   Screen_Register(Screen_TimeLight);
-//   Screen_Register(Screen_TimeDate);
+   Screen_Register(Screen_TimeDate);
 //   Screen_Register(Screen_LightDebug);
 //     Screen_Register(Screen_TimeTempBatt);
 

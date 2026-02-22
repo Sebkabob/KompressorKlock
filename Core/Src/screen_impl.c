@@ -34,7 +34,7 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     char date_str[32];
 
     const char *weekdays_short[] = {
-        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    	"Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
     };
 
     const char *day_suffix[] = {
