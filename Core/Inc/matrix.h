@@ -42,4 +42,6 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
                            const char *text, int *scroll_offset,
                            uint32_t speed_ms, uint32_t *last_scroll_tick);
 
+void Matrix_TIM3_IRQHandler(void);
+
 #endif

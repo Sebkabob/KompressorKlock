@@ -198,8 +198,8 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         };
 
         const char *weekdays[] = {
-            "Sunday", "Monday", "Tuesday", "Wednesday",
-            "Thursday", "Friday", "Saturday"
+            "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday",
+            "Thursday", "Friday"
         };
 
         const char *day_suffix[] = {
