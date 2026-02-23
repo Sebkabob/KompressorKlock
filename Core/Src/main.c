@@ -108,14 +108,14 @@ int main(void)
   // Screen_Register(Screen_Logo);
   // Screen_Register(Screen_Logo2);
   // Screen_Register(Screen_Time);
-   Screen_Register(Screen_TimeTempHumid);
+//   Screen_Register(Screen_TimeTempHumid);
 //   Screen_Register(Screen_Battery);
 //  Screen_Register(Screen_Battery2);
   // Screen_Register(Screen_TempHumid);
 //   Screen_Register(Screen_TimeLight);
 //   Screen_Register(Screen_TimeDate);
 //   Screen_Register(Screen_LightDebug);
-//     Screen_Register(Screen_TimeTempBatt);
+     Screen_Register(Screen_TimeTempBatt);
 
 
   Screen_SetAutoCycle(true);
@@ -262,7 +262,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 15;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 999;
+  htim3.Init.Period = 259;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
