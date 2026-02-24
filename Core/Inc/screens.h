@@ -55,4 +55,7 @@ void Screen_EnterSettings(void);
  */
 void Screen_ExitSettings(void);
 
+void Screen_SetCurrent(int index);
+
+
 #endif // SCREENS_H

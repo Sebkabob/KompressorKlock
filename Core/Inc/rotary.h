@@ -6,28 +6,26 @@
 
 /* ================= PUBLIC API ================= */
 
-/**
- * @brief Initialize rotary encoder with EXTI interrupts. Call once before main loop.
- *        Configures ROT_A and ROT_B as rising+falling EXTI inputs.
- */
 void Rotary_Init(void);
-
-/**
- * @brief Poll accumulated encoder steps and switch state. Call every ~5ms from main loop.
- *        Consumes steps accumulated by the EXTI ISR and drives screen transitions.
- */
 void Rotary_Update(void);
-
-/**
- * @brief Returns true once if the switch was pressed (short press, debounced).
- *        Clears the flag on read.
- */
 bool Rotary_SWPressed(void);
+void Rotary_EXTI_Handler(void);
+
+/* ================= INTERACTIVE SCREEN REGISTRATION ================= */
+
+void Rotary_SetStopwatchScreenIndex(int idx);
+void Rotary_SetCountdownScreenIndex(int idx);
+
+/* ================= PRESS INDICATOR BAR ================= */
 
 /**
- * @brief EXTI interrupt handler for encoder pins.
- *        Call this from EXTI0_1_IRQHandler and EXTI4_15_IRQHandler.
+ * @brief Get how many pixels (0-7) the hold bar should show.
+ *        0 = nothing, 1-7 = bar height from bottom.
+ *        Fills over the hold duration relevant to the current context:
+ *          - On stopwatch/countdown screens: 1 second (timer reset hold)
+ *          - Elsewhere: 2 seconds (settings entry hold)
+ *        Only shown during holds, not on short presses.
  */
-void Rotary_EXTI_Handler(void);
+uint8_t Rotary_GetBarHeight(void);
 
 #endif // ROTARY_H

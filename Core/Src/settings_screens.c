@@ -189,8 +189,9 @@ static DateField_t ds_field;
 static uint32_t ds_blink_tick;
 static bool     ds_blink_on;
 
+/* RV3032 weekday: 0=Sunday, 1=Monday, ... 6=Saturday */
 static const char *weekday_names_short[] = {
-    "Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
+    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
 
 static const char *month_names_short[] = {

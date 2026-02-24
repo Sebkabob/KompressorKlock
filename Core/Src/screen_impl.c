@@ -2,6 +2,7 @@
 #include "sensor_manager.h"
 #include "rtc_rv3032.h"
 #include "ltr_329.h"
+#include "timer_app.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
@@ -22,7 +23,6 @@ void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
     char str[32];
-
     sprintf(str, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
@@ -34,9 +34,8 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     char date_str[32];
 
     const char *weekdays_short[] = {
-    	"Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
     };
-
     const char *day_suffix[] = {
         "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",
         "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",
@@ -45,7 +44,6 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     };
 
     char am_pm = (data->hours_24 < 12) ? 'a' : 'p';
-
     sprintf(time_str, "%02d:%02d%c", data->hours_12, data->minutes, am_pm);
 
     uint8_t weekday = RV3032_GetWeekday();
@@ -70,7 +68,6 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     } else {
         sprintf(str, "%2d%% %3dmA", data->soc_percent, data->current_mA);
     }
-
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
@@ -78,9 +75,7 @@ void Screen_Battery2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
     char str[32];
-
     sprintf(str, "%3dmA %4dmV %2d%%", data->current_mA, data->voltage_mV, data->soc_percent);
-
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
@@ -88,7 +83,6 @@ void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
     char str[32];
-
     sprintf(str, "  %2dF   %2d\x01%%", data->temp_f, data->humidity);
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
@@ -96,8 +90,7 @@ void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
-    char str1[32];
-    char str2[32];
+    char str1[32], str2[32];
 
     sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str1);
@@ -109,8 +102,7 @@ void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
-    char str1[32];
-    char str2[32];
+    char str1[32], str2[32];
 
     sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str1);
@@ -122,8 +114,7 @@ void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
-    char str1[32];
-    char str2[32];
+    char str1[32], str2[32];
 
     sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str1);
@@ -132,23 +123,6 @@ void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawTextRight_Buf(buf, 0, str2);
 }
 
-/**
- * @brief Debug screen for tuning brightness — page 0 and page 1.
- *
- * Alternates every 2 seconds between two views:
- *
- * Page 0: "R:xx F:xx M:xxx B:xxx"
- *   R = Raw single-sample light %
- *   F = Filtered (trimmed mean) light %
- *   M = Mapped brightness (from breakpoint table)
- *   B = actual Brightness (after smoothing)
- *
- * Page 1: "C0:xxxxx C1:xxxxx"
- *   C0 = Raw channel 0 (visible + IR) from sensor
- *   C1 = Raw channel 1 (IR only) from sensor
- *   These are the actual 16-bit ADC counts — use them to
- *   calibrate LTR_329_MAX_RAW_VALUE and sensor gain.
- */
 void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     static uint32_t last_page_switch = 0;
@@ -166,16 +140,13 @@ void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         uint8_t filtered = LTR_329_GetLightPercent();
         uint8_t mapped = SensorManager_GetMappedBrightness();
         uint8_t actual = SensorManager_GetCurrentBrightness();
-
         sprintf(str, "%02d %02d", raw, filtered);
         Matrix_DrawText_Buf(buf, 0, 0, str);
-
         sprintf(str, "%03d %03d", mapped, actual);
         Matrix_DrawTextRight_Buf(buf, 0, str);
     } else {
         uint16_t ch0 = LTR_329_GetChannel0();
         uint16_t ch1 = LTR_329_GetChannel1();
-
         sprintf(str, "%05u %05u", ch0, ch1);
         Matrix_DrawTextCentered_Buf(buf, 0, str);
     }
@@ -196,12 +167,10 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December"
         };
-
         const char *weekdays[] = {
-            "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday",
-            "Thursday", "Friday"
+            "Sunday", "Monday", "Tuesday", "Wednesday",
+            "Thursday", "Friday", "Saturday"
         };
-
         const char *day_suffix[] = {
             "th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th",
             "th", "th", "th", "th", "th", "th", "th", "th", "th", "th",
@@ -210,30 +179,131 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         };
 
         const char *greeting;
-        if (data->hours_24 < 12) {
-            greeting = "morning";
-        } else if (data->hours_24 < 18) {
-            greeting = "afternoon";
-        } else {
-            greeting = "evening";
-        }
+        if (data->hours_24 < 12) greeting = "morning";
+        else if (data->hours_24 < 18) greeting = "afternoon";
+        else greeting = "evening";
 
         sprintf(message,
             "Today is %s, %s %d%s, %d. It is a lovely %s. "
             "The time is %02d:%02d:%02d. Battery: %d%% Temp: %dF. Have a great day!",
             weekdays[RV3032_GetWeekday()],
             months[RV3032_GetMonth() - 1],
-            RV3032_GetDate(),
-            day_suffix[RV3032_GetDate()],
-            RV3032_GetYear(),
-            greeting,
+            RV3032_GetDate(), day_suffix[RV3032_GetDate()],
+            RV3032_GetYear(), greeting,
             data->hours_12, data->minutes, data->seconds,
-            data->soc_percent,
-            data->temp_f
+            data->soc_percent, data->temp_f
         );
-
         last_update = now;
     }
 
     Matrix_ScrollText_Buf(buf, 0, message, &scroll_offset, 1, &scroll_tick);
+}
+
+/* =====================================================================
+ *  STOPWATCH SCREEN
+ *
+ *  Format (always centered):
+ *    Stopped:  "00.00"
+ *    Running:  "> 05.23"   or  "> 1:05.23"   or  "> 1:00:05.23"
+ *    Paused:   "|| 05.23"  or  "|| 1:05.23"  or  "|| 1:00:05.23"
+ * =====================================================================*/
+
+void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+
+    uint32_t total_ms = Stopwatch_GetTotalMs();
+    StopwatchState_t state = Stopwatch_GetState();
+
+    uint32_t total_secs = total_ms / 1000;
+    uint8_t  cs    = (uint8_t)((total_ms / 10) % 100);
+    uint8_t  secs  = (uint8_t)(total_secs % 60);
+    uint8_t  mins  = (uint8_t)((total_secs / 60) % 60);
+    uint16_t hours = (uint16_t)(total_secs / 3600);
+
+    /*
+     * Build the time portion first, then prepend the icon.
+     * This way the centering accounts for the icon width.
+     */
+    char time_part[24];
+    if (hours > 0) {
+        sprintf(time_part, "%d:%02d:%02d.%02d", (int)hours, mins, secs, cs);
+    } else if (mins > 0) {
+        sprintf(time_part, "%d:%02d.%02d", mins, secs, cs);
+    } else {
+        sprintf(time_part, "%02d.%02d", secs, cs);
+    }
+
+    if (state == SW_STATE_RUNNING) {
+        sprintf(str, "> %s", time_part);
+    } else if (state == SW_STATE_PAUSED) {
+        sprintf(str, "|| %s", time_part);
+    } else {
+        /* STOPPED — just show the time, no icon */
+        sprintf(str, "%s", time_part);
+    }
+
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
+}
+
+/* =====================================================================
+ *  COUNTDOWN SCREEN
+ *
+ *  IDLE:      shows last set time as "HH:MM:SS" (static)
+ *  SETTING:   blinking field with __ placeholder
+ *  RUNNING:   "> HH:MM:SS"
+ *  PAUSED:    "|| HH:MM:SS"
+ *  FINISHED:  flashing "00:00:00" / blank (alarm active)
+ * =====================================================================*/
+
+void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+
+    CountdownState_t state = Countdown_GetState();
+
+    uint8_t h = Countdown_GetHours();
+    uint8_t m = Countdown_GetMinutes();
+    uint8_t s = Countdown_GetSeconds();
+
+    if (state == CD_STATE_IDLE) {
+        sprintf(str, "%02d:%02d:%02d", h, m, s);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
+
+    } else if (state == CD_STATE_SETTING) {
+        CountdownField_t field = Countdown_GetField();
+        bool blink_on = ((HAL_GetTick() / 500) % 2) == 0;
+
+        char h_str[4], m_str[4], s_str[4];
+
+        if (field == CD_FIELD_HOURS && !blink_on)
+            sprintf(h_str, "__");
+        else
+            sprintf(h_str, "%02d", h);
+
+        if (field == CD_FIELD_MINUTES && !blink_on)
+            sprintf(m_str, "__");
+        else
+            sprintf(m_str, "%02d", m);
+
+        if (field == CD_FIELD_SECONDS && !blink_on)
+            sprintf(s_str, "__");
+        else
+            sprintf(s_str, "%02d", s);
+
+        sprintf(str, "%s:%s:%s", h_str, m_str, s_str);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
+
+    } else if (state == CD_STATE_FINISHED) {
+        bool flash_on = ((HAL_GetTick() / 300) % 2) == 0;
+        if (flash_on) {
+            Matrix_DrawTextCentered_Buf(buf, 0, "00:00:00");
+        }
+
+    } else {
+        /* RUNNING or PAUSED */
+        const char *icon = (state == CD_STATE_RUNNING) ? ">" : "||";
+        sprintf(str, "%s %02d:%02d:%02d", icon, h, m, s);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
+    }
 }
