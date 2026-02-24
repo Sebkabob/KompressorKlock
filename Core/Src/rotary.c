@@ -3,22 +3,16 @@
 #include "screens.h"
 
 /*
- * ================= QUADRATURE DECODING =================
+ * ================= INTERRUPT-DRIVEN QUADRATURE DECODING =================
  *
- * A rotary encoder outputs two signals (A and B) that are 90° out of phase.
- * We track the last 2 bits (prev_A, prev_B) and the current 2 bits as a
- * 4-bit state: (prev_A << 3 | prev_B << 2 | cur_A << 1 | cur_B).
+ * Both encoder pins (ROT_A on PA12, ROT_B on PB0) are configured as
+ * EXTI inputs with rising+falling edge triggers. Every edge fires an
+ * ISR that reads both pins, builds a 4-bit LUT index from
+ * (prev_AB << 2 | cur_AB), and accumulates sub-steps.
  *
- * Only certain transitions are valid for a real rotation. Invalid transitions
- * (caused by noise or bounce) are simply ignored — the encoder state only
- * updates on recognized sequences.
- *
- * Valid CW  transitions: 0b0001, 0b0111, 0b1110, 0b1000
- * Valid CCW transitions: 0b0010, 0b1011, 0b1101, 0b0100
- *
- * These correspond to the Gray code sequence:
- *   CW:  00 -> 01 -> 11 -> 10 -> 00 ...
- *   CCW: 00 -> 10 -> 11 -> 01 -> 00 ...
+ * The main-loop Rotary_Update() then checks the accumulated steps
+ * and fires screen transitions. This ensures no edges are missed
+ * even at high rotation speeds.
  */
 
 /* Lookup table: index = (prev_A << 3 | prev_B << 2 | cur_A << 1 | cur_B)
@@ -37,30 +31,47 @@ static const int8_t encoder_lut[16] = {
 };
 
 /* ================= TIMING ================= */
-#define ENCODER_DEBOUNCE_MS   20u   /* Minimum ms between accepted encoder steps */
+#define ENCODER_DEBOUNCE_MS   20u   /* Minimum ms between accepted detent actions */
 #define SW_DEBOUNCE_MS        50u   /* Minimum ms for switch state to be stable   */
+#define DETENT_THRESHOLD       4    /* Sub-steps per detent (most encoders = 4)   */
 
 /* ================= STATE ================= */
-static uint8_t  enc_state      = 0;   /* Upper 2 bits = prev AB, lower 2 = current AB */
-static uint32_t last_step_tick = 0;
-static int8_t   step_accum     = 0;   /* Accumulate steps; act on full detent */
+static volatile uint8_t  enc_state  = 0;   /* Previous AB in bits 1:0 */
+static volatile int8_t   step_accum = 0;   /* Accumulated from ISR    */
 
-static bool     sw_last_raw    = true;   /* true = HIGH (not pressed, pulled up) */
+static uint32_t last_step_tick = 0;
+
+static bool     sw_last_raw    = true;
 static bool     sw_stable      = true;
 static uint32_t sw_change_tick = 0;
 static bool     sw_pressed_flag = false;
+
+/* ================= ISR — called on every edge of ROT_A or ROT_B ================= */
+
+void Rotary_EXTI_Handler(void)
+{
+    uint8_t a = (HAL_GPIO_ReadPin(ROT_A_GPIO_Port, ROT_A_Pin) == GPIO_PIN_SET) ? 1u : 0u;
+    uint8_t b = (HAL_GPIO_ReadPin(ROT_B_GPIO_Port, ROT_B_Pin) == GPIO_PIN_SET) ? 1u : 0u;
+
+    uint8_t cur = (a << 1) | b;
+    uint8_t idx = (enc_state << 2) | cur;
+
+    int8_t delta = encoder_lut[idx & 0x0Fu];
+    if (delta != 0) {
+        step_accum += delta;
+    }
+
+    enc_state = cur;
+}
 
 /* ================= INIT ================= */
 
 void Rotary_Init(void)
 {
-    /* Snapshot initial pin states so the first Update() doesn't
-     * see a false transition from 0,0. */
+    /* Snapshot initial pin states */
     uint8_t a = (HAL_GPIO_ReadPin(ROT_A_GPIO_Port, ROT_A_Pin) == GPIO_PIN_SET) ? 1u : 0u;
     uint8_t b = (HAL_GPIO_ReadPin(ROT_B_GPIO_Port, ROT_B_Pin) == GPIO_PIN_SET) ? 1u : 0u;
-
-    /* Store as both "previous" and "current" so the LUT sees 0 delta */
-    enc_state = (a << 3) | (b << 2) | (a << 1) | b;
+    enc_state = (a << 1) | b;
 
     sw_last_raw    = (HAL_GPIO_ReadPin(ROT_SW_GPIO_Port, ROT_SW_Pin) == GPIO_PIN_SET);
     sw_stable      = sw_last_raw;
@@ -68,45 +79,61 @@ void Rotary_Init(void)
     sw_pressed_flag = false;
     last_step_tick  = HAL_GetTick();
     step_accum      = 0;
+
+    /*
+     * Configure ROT_A (PA12) and ROT_B (PB0) as EXTI rising+falling edge.
+     * The GPIO pins are already configured as inputs with pull-ups by MX_GPIO_Init().
+     * We just need to re-init with interrupt mode here.
+     */
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    /* ROT_A = PA12 -> EXTI12 (handled by EXTI4_15_IRQHandler) */
+    GPIO_InitStruct.Pin  = ROT_A_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(ROT_A_GPIO_Port, &GPIO_InitStruct);
+
+    /* ROT_B = PB0 -> EXTI0 (handled by EXTI0_1_IRQHandler) */
+    GPIO_InitStruct.Pin  = ROT_B_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(ROT_B_GPIO_Port, &GPIO_InitStruct);
+
+    /* Enable NVIC for both EXTI lines — priority 1 (below TIM3 at 0) */
+    HAL_NVIC_SetPriority(EXTI0_1_IRQn, 1, 0);
+    HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
+
+    HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
+    HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 }
 
-/* ================= UPDATE ================= */
+/* ================= UPDATE (call from main loop ~5ms) ================= */
 
 void Rotary_Update(void)
 {
     uint32_t now = HAL_GetTick();
 
-    /* ---- Encoder ---- */
+    /* ---- Encoder: consume accumulated steps from ISR ---- */
     {
-        uint8_t a = (HAL_GPIO_ReadPin(ROT_A_GPIO_Port, ROT_A_Pin) == GPIO_PIN_SET) ? 1u : 0u;
-        uint8_t b = (HAL_GPIO_ReadPin(ROT_B_GPIO_Port, ROT_B_Pin) == GPIO_PIN_SET) ? 1u : 0u;
+        /* Atomically read and clear the accumulator */
+        __disable_irq();
+        int8_t accum = step_accum;
+        step_accum = 0;
+        __enable_irq();
 
-        /* Shift previous state into upper bits, put new reading in lower bits */
-        uint8_t idx = ((enc_state & 0x0Cu) << 1) | (a << 1) | b;
-        /*            ^^^^^^^^^^^^^^^^^^^ keeps prev_A and prev_B             */
-
-        int8_t delta = encoder_lut[idx & 0x0Fu];
-
-        /* Save current AB as next iteration's "previous" */
-        enc_state = (a << 3) | (b << 2);
-
-        if (delta != 0) {
-            step_accum += delta;
-
-            if ((now - last_step_tick) >= ENCODER_DEBOUNCE_MS
-                && (step_accum >= 4 || step_accum <= -4)  // raised from 2 to 4
-                && !Screen_IsTransitioning())               // don't stack transitions
-            {
-                if (step_accum > 0) {
-                    Screen_Next(TRANSITION_SLIDE_UP);
-                } else {
-                    Screen_Prev(TRANSITION_SLIDE_DOWN);
-                }
-                step_accum     = 0;
+        if (accum != 0 &&
+            (now - last_step_tick) >= ENCODER_DEBOUNCE_MS &&
+            !Screen_IsTransitioning())
+        {
+            if (accum >= DETENT_THRESHOLD) {
+                Screen_Next(TRANSITION_SLIDE_UP);
+                last_step_tick = now;
+            } else if (accum <= -DETENT_THRESHOLD) {
+                Screen_Prev(TRANSITION_SLIDE_DOWN);
                 last_step_tick = now;
             }
-        } else if ((now - last_step_tick) > 200u) {
-            step_accum = 0;
+            /* If |accum| < DETENT_THRESHOLD, steps are lost — that's
+             * intentional debouncing for partial/noisy detents. */
         }
     }
 
@@ -115,7 +142,6 @@ void Rotary_Update(void)
         bool raw = (HAL_GPIO_ReadPin(ROT_SW_GPIO_Port, ROT_SW_Pin) == GPIO_PIN_SET);
 
         if (raw != sw_last_raw) {
-            /* Pin changed — restart the debounce timer */
             sw_last_raw    = raw;
             sw_change_tick = now;
         }
@@ -123,8 +149,6 @@ void Rotary_Update(void)
         if ((now - sw_change_tick) >= SW_DEBOUNCE_MS) {
             if (raw != sw_stable) {
                 sw_stable = raw;
-
-                /* Falling edge (HIGH->LOW) = button pressed */
                 if (!sw_stable) {
                     sw_pressed_flag = true;
                 }
