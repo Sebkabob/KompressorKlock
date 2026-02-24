@@ -35,7 +35,7 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     char date_str[32];
 
     const char *weekdays_short[] = {
-    	"Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
+        "Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
     };
 
     const char *day_suffix[] = {
@@ -228,42 +228,43 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 /* =====================================================================
  *  STOPWATCH SCREEN
  *
- *  Layout: "ICON HH:MM:SS"
- *  Icons:  > = running, || = paused, [] = stopped
+ *  Layout:
+ *    Stopped:  "00.00"
+ *    Running:  "> SS.cc"  or  "> M:SS.cc"  or  "> H:MM:SS.cc"
+ *    Paused:   "|| SS.cc" etc.
  *
- *  The 5x7 font custom glyphs are used for compact icons.
+ *  Format rules:
+ *    < 60s:    SS.cc          "05.23"
+ *    < 60m:    M:SS.cc        "1:05.23"
+ *    >= 60m:   H:MM:SS.cc     "1:00:05.23"
  * =====================================================================*/
 
 void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
-    char str[24];
+    char str[32];
 
-    uint8_t m = Stopwatch_GetMinutes();
-    uint8_t s = Stopwatch_GetSeconds();
-    uint8_t t = Stopwatch_GetTenths();
+    uint32_t total_ms = Stopwatch_GetTotalMs();
     StopwatchState_t state = Stopwatch_GetState();
 
-    /*
-     * Format:  MM:SS.T  (under 60 min)
-     *         H:MM:SS.T (60 min and above)
-     *
-     *   Stopped:  "00:00.0"
-     *   Running:  "> 01:23.4"  or  "> 1:05:23.4"
-     *   Paused:   "|| 01:23.4" or  "|| 1:05:23.4"
-     */
-    uint16_t total_sec = Stopwatch_GetTotalSeconds();
-    uint16_t hours     = total_sec / 3600;
-    uint8_t  mins      = (total_sec / 60) % 60;
-    uint8_t  secs      = total_sec % 60;
+    uint32_t total_secs = total_ms / 1000;
+    uint8_t cs    = (uint8_t)((total_ms / 10) % 100);  /* centiseconds */
+    uint8_t secs  = (uint8_t)(total_secs % 60);
+    uint8_t mins  = (uint8_t)((total_secs / 60) % 60);
+    uint16_t hours = (uint16_t)(total_secs / 3600);
 
     const char *icon = "";
     if (state == SW_STATE_RUNNING) icon = "> ";
     else if (state == SW_STATE_PAUSED) icon = "|| ";
 
     if (hours > 0) {
-        sprintf(str, "%s%d:%02d:%02d.%d", icon, (int)hours, mins, secs, t);
+        /* H:MM:SS.cc */
+        sprintf(str, "%s%d:%02d:%02d.%02d", icon, (int)hours, mins, secs, cs);
+    } else if (mins > 0) {
+        /* M:SS.cc */
+        sprintf(str, "%s%d:%02d.%02d", icon, mins, secs, cs);
     } else {
-        sprintf(str, "%s%02d:%02d.%d", icon, mins, secs, t);
+        /* SS.cc */
+        sprintf(str, "%s%02d.%02d", icon, secs, cs);
     }
 
     Matrix_DrawTextCentered_Buf(buf, 0, str);
@@ -272,10 +273,11 @@ void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 /* =====================================================================
  *  COUNTDOWN SCREEN
  *
- *  SETTING mode:  blinking field like time-set,  "SET HH:MM:SS"
- *  RUNNING mode:  "> HH:MM:SS" or "> MM:SS"
+ *  IDLE mode:     shows last set time as "HH:MM:SS" (static, no blink)
+ *  SETTING mode:  blinking field, "HH:MM:SS" with __ on active field
+ *  RUNNING mode:  "> HH:MM:SS"
  *  PAUSED mode:   "|| HH:MM:SS"
- *  FINISHED mode: flashing "00:00" / blank
+ *  FINISHED mode: flashing "00:00:00" / blank
  * =====================================================================*/
 
 void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -289,7 +291,9 @@ void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     uint8_t s = Countdown_GetSeconds();
 
     if (state == CD_STATE_IDLE) {
-        Matrix_DrawTextCentered_Buf(buf, 0, "00:00:00");
+        /* Show the last set time (or default) — user can see what they'll get */
+        sprintf(str, "%02d:%02d:%02d", h, m, s);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
 
     } else if (state == CD_STATE_SETTING) {
         /* Blinking field editor — show __ for active field when blink is off */

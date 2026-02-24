@@ -472,10 +472,10 @@ void Screen_MarkDirty(void)
 
 void Screen_SetCurrent(int index)
 {
-    if (index >= 0 && index < sm.count) {
-        sm.current = index;
+    if (index >= 0 && index < sm.screen_count) {
+        sm.current_screen = index;
         sm.dirty = true;
         /* Cancel any in-progress transition */
-        sm.transitioning = false;
+        sm.state = STATE_IDLE;
     }
 }

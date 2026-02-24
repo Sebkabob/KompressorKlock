@@ -25,37 +25,6 @@ static int countdown_screen_index = -1;
 void Rotary_SetStopwatchScreenIndex(int idx) { stopwatch_screen_index = idx; }
 void Rotary_SetCountdownScreenIndex(int idx) { countdown_screen_index = idx; }
 
-/**
- * @brief Is the countdown alarm going off? (FINISHED state)
- *
- * When the countdown alarm is active:
- *   - If the user is on another screen, force-jump to countdown screen
- *   - Scroll is completely locked (user can't navigate away)
- *   - Only a press dismisses the alarm
- */
-static bool countdown_alarm_active(void)
-{
-    return (countdown_screen_index >= 0 &&
-            Countdown_GetState() == CD_STATE_FINISHED);
-}
-
-/**
- * @brief Should scroll be claimed (not used for screen navigation)?
- *
- * Claimed in: countdown SETTING mode, or countdown FINISHED (alarm locked).
- * All other states: scroll navigates screens freely.
- */
-static bool scroll_locked(void)
-{
-    if (countdown_alarm_active()) return true;
-
-    int cur = Screen_GetCurrent();
-    if (cur == countdown_screen_index && countdown_screen_index >= 0) {
-        return (Countdown_GetState() == CD_STATE_SETTING);
-    }
-    return false;
-}
-
 static bool on_stopwatch_screen(void)
 {
     return (Screen_GetCurrent() == stopwatch_screen_index && stopwatch_screen_index >= 0);
@@ -64,6 +33,20 @@ static bool on_stopwatch_screen(void)
 static bool on_countdown_screen(void)
 {
     return (Screen_GetCurrent() == countdown_screen_index && countdown_screen_index >= 0);
+}
+
+/**
+ * @brief Should scroll be claimed (not used for screen navigation)?
+ *
+ * Only claimed during countdown SETTING mode when on the countdown screen.
+ * All other states (including FINISHED): scroll navigates screens freely.
+ */
+static bool scroll_claimed(void)
+{
+    if (on_countdown_screen()) {
+        return (Countdown_GetState() == CD_STATE_SETTING);
+    }
+    return false;
 }
 
 /* ================= STATE ================= */
@@ -145,16 +128,6 @@ void Rotary_Update(void)
     uint32_t now = HAL_GetTick();
     bool in_settings = (Settings_GetState() != SETTINGS_STATE_INACTIVE);
 
-    /* ---- Countdown alarm: force-jump to countdown screen ---- */
-    if (countdown_alarm_active() && !in_settings) {
-        if (Screen_GetCurrent() != countdown_screen_index) {
-            Screen_SetCurrent(countdown_screen_index);
-            Screen_MarkDirty();
-        }
-    }
-
-    bool locked = (!in_settings) && scroll_locked();
-
     /* ---- Encoder ---- */
     {
         __disable_irq();
@@ -167,6 +140,7 @@ void Rotary_Update(void)
         if ((now - last_step_tick) >= ENCODER_DEBOUNCE_MS)
         {
             if (in_settings) {
+                /* Settings mode: scroll adjusts settings */
                 while (pending_steps >= DETENT_THRESHOLD) {
                     Settings_OnScroll(-1);
                     Screen_MarkDirty();
@@ -179,27 +153,23 @@ void Rotary_Update(void)
                     pending_steps += DETENT_THRESHOLD;
                     last_step_tick = now;
                 }
-            } else if (locked) {
-                /* Countdown setting: route scroll to adjust field values */
-                if (on_countdown_screen() && Countdown_GetState() == CD_STATE_SETTING) {
-                    while (pending_steps >= DETENT_THRESHOLD) {
-                        Countdown_OnScroll(-1);
-                        Screen_MarkDirty();
-                        pending_steps -= DETENT_THRESHOLD;
-                        last_step_tick = now;
-                    }
-                    while (pending_steps <= -DETENT_THRESHOLD) {
-                        Countdown_OnScroll(1);
-                        Screen_MarkDirty();
-                        pending_steps += DETENT_THRESHOLD;
-                        last_step_tick = now;
-                    }
-                } else {
-                    /* Countdown FINISHED alarm: eat scroll input, don't navigate */
-                    pending_steps = 0;
+            } else if (scroll_claimed()) {
+                /* Countdown SETTING mode: scroll adjusts field values */
+                while (pending_steps >= DETENT_THRESHOLD) {
+                    Countdown_OnScroll(-1);
+                    Screen_MarkDirty();
+                    pending_steps -= DETENT_THRESHOLD;
+                    last_step_tick = now;
+                }
+                while (pending_steps <= -DETENT_THRESHOLD) {
+                    Countdown_OnScroll(1);
+                    Screen_MarkDirty();
+                    pending_steps += DETENT_THRESHOLD;
+                    last_step_tick = now;
                 }
             } else {
-                /* Normal screen navigation */
+                /* Normal screen navigation — always works, even during
+                 * stopwatch running, countdown running/paused/finished */
                 if (!Screen_IsTransitioning()) {
                     if (pending_steps >= DETENT_THRESHOLD) {
                         Screen_Next(TRANSITION_SLIDE_UP);
@@ -235,6 +205,7 @@ void Rotary_Update(void)
                     sw_held_since = now;
                     sw_hold_consumed = false;
 
+                    /* Instant press-on-down for settings OK field */
                     if (in_settings && Settings_IsOnOK()) {
                         Settings_OnPress();
                         Screen_MarkDirty();
@@ -243,11 +214,7 @@ void Rotary_Update(void)
                 } else {
                     /* Button just released — short press */
                     if (was_held && !sw_hold_consumed) {
-                        if (countdown_alarm_active()) {
-                            /* Dismiss alarm — highest priority */
-                            Countdown_OnPress();
-                            Screen_MarkDirty();
-                        } else if (in_settings) {
+                        if (in_settings) {
                             Settings_OnPress();
                             Screen_MarkDirty();
                         } else if (on_stopwatch_screen()) {
@@ -269,16 +236,12 @@ void Rotary_Update(void)
         if (sw_held && !sw_hold_consumed) {
             uint32_t held_ms = now - sw_held_since;
 
-            /* Countdown alarm active: no hold actions, only short press dismisses */
-            if (countdown_alarm_active()) {
-                /* Do nothing — wait for release */
-            }
             /*
              * 1-second hold: timer reset/clear
              *   Stopwatch: reset from any state
-             *   Countdown: clear from setting or paused
+             *   Countdown: clear from setting, running, or paused
              */
-            else if (held_ms >= TIMER_HOLD_MS && held_ms < LONG_PRESS_MS) {
+            if (held_ms >= TIMER_HOLD_MS && held_ms < LONG_PRESS_MS) {
                 if (!in_settings) {
                     if (on_stopwatch_screen()) {
                         Stopwatch_OnLongPress();
@@ -286,7 +249,8 @@ void Rotary_Update(void)
                         sw_hold_consumed = true;
                     } else if (on_countdown_screen()) {
                         CountdownState_t cds = Countdown_GetState();
-                        if (cds == CD_STATE_SETTING || cds == CD_STATE_PAUSED) {
+                        if (cds == CD_STATE_SETTING || cds == CD_STATE_PAUSED ||
+                            cds == CD_STATE_RUNNING) {
                             Countdown_OnLongPress();
                             Screen_MarkDirty();
                             sw_hold_consumed = true;
@@ -296,7 +260,7 @@ void Rotary_Update(void)
             }
             /*
              * 2-second hold: settings entry/exit
-             * Blocked on active timer screens.
+             * Blocked on active timer screens (running/paused/setting/finished).
              */
             else if (held_ms >= LONG_PRESS_MS) {
                 sw_hold_consumed = true;
