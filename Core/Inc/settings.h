@@ -31,4 +31,11 @@ void Settings_OnPress(void);
 void Settings_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 bool Settings_NeedsRedraw(void);
 
+/**
+ * @brief Check if the current setting editor is on its OK/confirm field.
+ *        Used by rotary to decide whether to fire instant press-on-down.
+ * @return true if editing and on the OK field, false otherwise
+ */
+bool Settings_IsOnOK(void);
+
 #endif // SETTINGS_H

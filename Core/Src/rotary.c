@@ -3,10 +3,6 @@
 #include "screens.h"
 #include "settings.h"
 
-/*
- * ================= INTERRUPT-DRIVEN QUADRATURE DECODING =================
- */
-
 static const int8_t encoder_lut[16] = {
       0,     1,    -1,     0,
      -1,     0,     0,     1,
@@ -24,12 +20,6 @@ static const int8_t encoder_lut[16] = {
 static volatile uint8_t  enc_state  = 0;
 static volatile int8_t   step_accum = 0;
 
-/*
- * Persistent accumulator: ISR adds raw sub-steps to step_accum.
- * The main loop copies step_accum into pending_steps (atomically)
- * and only consumes full detents, carrying the remainder forward.
- * This prevents losing partial steps between poll cycles.
- */
 static int8_t   pending_steps = 0;
 static uint32_t last_step_tick = 0;
 
@@ -117,15 +107,14 @@ void Rotary_Update(void)
         if ((now - last_step_tick) >= ENCODER_DEBOUNCE_MS)
         {
             if (in_settings) {
-                /* Consume one detent at a time, carry remainder */
                 while (pending_steps >= DETENT_THRESHOLD) {
-                    Settings_OnScroll(-1);  /* Negated to match physical direction */
+                    Settings_OnScroll(-1);
                     Screen_MarkDirty();
                     pending_steps -= DETENT_THRESHOLD;
                     last_step_tick = now;
                 }
                 while (pending_steps <= -DETENT_THRESHOLD) {
-                    Settings_OnScroll(1);   /* Negated to match physical direction */
+                    Settings_OnScroll(1);
                     Screen_MarkDirty();
                     pending_steps += DETENT_THRESHOLD;
                     last_step_tick = now;
@@ -134,7 +123,7 @@ void Rotary_Update(void)
                 if (!Screen_IsTransitioning()) {
                     if (pending_steps >= DETENT_THRESHOLD) {
                         Screen_Next(TRANSITION_SLIDE_UP);
-                        pending_steps = 0;  /* Consume all on screen transition */
+                        pending_steps = 0;
                         last_step_tick = now;
                     } else if (pending_steps <= -DETENT_THRESHOLD) {
                         Screen_Prev(TRANSITION_SLIDE_DOWN);
@@ -166,15 +155,23 @@ void Rotary_Update(void)
                     sw_held_since = now;
                     sw_long_consumed = false;
 
-                    /* Immediate press for settings (fast OK confirm) */
-                    if (in_settings) {
+                    /*
+                     * Instant press ONLY when on the OK confirmation field.
+                     * This lets the user confirm time/date as fast as possible
+                     * without accidentally triggering actions on other screens.
+                     */
+                    if (in_settings && Settings_IsOnOK()) {
                         Settings_OnPress();
                         Screen_MarkDirty();
+                        sw_long_consumed = true;  /* Don't also fire long-press */
                     }
                 } else {
                     /* Button just released */
                     if (was_held && !sw_long_consumed) {
-                        if (!in_settings) {
+                        if (in_settings) {
+                            Settings_OnPress();
+                            Screen_MarkDirty();
+                        } else {
                             sw_pressed_flag = true;
                         }
                     }

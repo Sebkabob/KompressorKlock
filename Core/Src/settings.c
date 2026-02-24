@@ -23,6 +23,7 @@ typedef void (*SettingScrollFunc)(int direction);
 typedef bool (*SettingPressFunc)(void);
 typedef void (*SettingRenderFunc)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 typedef bool (*SettingNeedsRedrawFunc)(void);
+typedef bool (*SettingIsOnOKFunc)(void);
 
 static const SettingEnterFunc setting_enter[SETTING_COUNT] = {
     TimeSetting_Enter,
@@ -52,6 +53,12 @@ static const SettingNeedsRedrawFunc setting_needs_redraw[SETTING_COUNT] = {
     TimeSetting_NeedsRedraw,
     DateSetting_NeedsRedraw,
     BrightnessSetting_NeedsRedraw,
+};
+
+static const SettingIsOnOKFunc setting_is_on_ok[SETTING_COUNT] = {
+    TimeSetting_IsOnOK,
+    DateSetting_IsOnOK,
+    BrightnessSetting_IsOnOK,
 };
 
 /* ================= PUBLIC API ================= */
@@ -127,4 +134,10 @@ bool Settings_NeedsRedraw(void)
         return setting_needs_redraw[menu_index]();
     }
     return false;
+}
+
+bool Settings_IsOnOK(void)
+{
+    if (state != SETTINGS_STATE_EDITING) return false;
+    return setting_is_on_ok[menu_index]();
 }

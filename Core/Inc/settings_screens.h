@@ -21,6 +21,7 @@ void TimeSetting_OnScroll(int direction);
 bool TimeSetting_OnPress(void);
 void TimeSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 bool TimeSetting_NeedsRedraw(void);
+bool TimeSetting_IsOnOK(void);
 
 /* ================= DATE SET ================= */
 
@@ -29,6 +30,7 @@ void DateSetting_OnScroll(int direction);
 bool DateSetting_OnPress(void);
 void DateSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 bool DateSetting_NeedsRedraw(void);
+bool DateSetting_IsOnOK(void);
 
 /* ================= BRIGHTNESS ================= */
 
@@ -37,5 +39,6 @@ void BrightnessSetting_OnScroll(int direction);
 bool BrightnessSetting_OnPress(void);
 void BrightnessSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 bool BrightnessSetting_NeedsRedraw(void);
+bool BrightnessSetting_IsOnOK(void);
 
 #endif // SETTINGS_SCREENS_H

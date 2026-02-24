@@ -25,9 +25,9 @@ typedef void (*ScreenRenderFunc_t)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 // Time-based transition speeds (in milliseconds)
 // These are constant regardless of timer period / brightness
-#define SLIDE_H_DURATION_MS      1300   // Horizontal slide total time
+#define SLIDE_H_DURATION_MS      500   // Horizontal slide total time
 #define SLIDE_V_DURATION_MS      400   // Vertical slide total time
-#define DISSOLVE_PHASE_MS        100   // Each dissolve phase (out + in)
+#define DISSOLVE_PHASE_MS        200   // Each dissolve phase (out + in)
 
 /* ================= PUBLIC API ================= */
 

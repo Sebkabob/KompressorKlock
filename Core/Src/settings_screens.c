@@ -9,18 +9,12 @@
 
 /* =====================================================================
  *  TIME SET
- * =====================================================================
- *
- * Flow: Hour -> Minute -> Second -> AM/PM -> "OK" -> (confirm = done)
- *
- * All numbers zero-padded. Active field blinks with "__".
- * Press on OK immediately writes to RTC.
- */
+ * =====================================================================*/
 
-static uint8_t ts_hour;      /* 1-12 */
-static uint8_t ts_minute;    /* 0-59 */
-static uint8_t ts_second;    /* 0-59 */
-static bool    ts_is_pm;     /* false=AM, true=PM */
+static uint8_t ts_hour;
+static uint8_t ts_minute;
+static uint8_t ts_second;
+static bool    ts_is_pm;
 static TimeField_t ts_field;
 
 static uint32_t ts_blink_tick;
@@ -168,12 +162,14 @@ bool TimeSetting_NeedsRedraw(void)
     return false;
 }
 
+bool TimeSetting_IsOnOK(void)
+{
+    return ts_field == TIME_FIELD_OK;
+}
+
 /* =====================================================================
  *  DATE SET
- * =====================================================================
- *
- * Flow: Weekday -> Month -> Date -> Year -> "OK" -> (confirm = done)
- */
+ * =====================================================================*/
 
 typedef enum {
     DATE_FIELD_WEEKDAY = 0,
@@ -363,30 +359,23 @@ bool DateSetting_NeedsRedraw(void)
     return false;
 }
 
+bool DateSetting_IsOnOK(void)
+{
+    return ds_field == DATE_FIELD_OK;
+}
+
 /* =====================================================================
  *  BRIGHTNESS
- * =====================================================================
- *
- * Two-phase editor:
- *   Phase 1 (VALUE): Scroll through Auto, 01%, 02%, ... 100%.
- *                     The value blinks. Press -> advance to OK.
- *   Phase 2 (OK):    "OK" blinks. Press -> apply and return.
- *
- * "Auto" means sensor_manager controls brightness automatically.
- * A manual value (1-100%) maps to brightness 1-255 and overrides auto.
- *
- * The brightness is applied live while scrolling so the user can
- * preview the effect immediately.
- */
+ * =====================================================================*/
 
 typedef enum {
     BRIGHT_FIELD_VALUE = 0,
     BRIGHT_FIELD_OK,
 } BrightField_t;
 
-#define BRIGHT_AUTO  0   /* Special value meaning auto mode */
+#define BRIGHT_AUTO  0
 
-static int bright_value;          /* 0=Auto, 1-100 = manual percent */
+static int bright_value;
 static BrightField_t bright_field;
 
 static uint32_t bright_blink_tick;
@@ -394,7 +383,6 @@ static bool     bright_blink_on;
 
 void BrightnessSetting_Enter(void)
 {
-    /* Start with current mode */
     if (SensorManager_IsAutoBrightness()) {
         bright_value = BRIGHT_AUTO;
     } else {
@@ -411,12 +399,10 @@ void BrightnessSetting_OnScroll(int direction)
     if (bright_field == BRIGHT_FIELD_OK) return;
 
     bright_value += direction;
-
-    /* Wrap: Auto(0) <-> 1 <-> 2 ... 100 <-> Auto(0) */
     if (bright_value < 0) bright_value = 100;
     if (bright_value > 100) bright_value = 0;
 
-    /* Live preview: apply brightness immediately while scrolling */
+    /* Live preview */
     if (bright_value == BRIGHT_AUTO) {
         SensorManager_SetAutoBrightness(true);
     } else {
@@ -437,7 +423,7 @@ bool BrightnessSetting_OnPress(void)
         return false;
     }
 
-    /* On OK: setting is already applied from live preview */
+    /* Already applied from live preview */
     return true;
 }
 
@@ -454,7 +440,6 @@ void BrightnessSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         return;
     }
 
-    /* Value field */
     if (bright_blink_on) {
         if (bright_value == BRIGHT_AUTO) {
             sprintf(str, "Auto");
@@ -462,11 +447,7 @@ void BrightnessSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
             sprintf(str, "%03d%%", bright_value);
         }
     } else {
-        if (bright_value == BRIGHT_AUTO) {
-            sprintf(str, "____");
-        } else {
-            sprintf(str, "____");
-        }
+        sprintf(str, "____");
     }
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
@@ -480,4 +461,9 @@ bool BrightnessSetting_NeedsRedraw(void)
         return true;
     }
     return false;
+}
+
+bool BrightnessSetting_IsOnOK(void)
+{
+    return bright_field == BRIGHT_FIELD_OK;
 }
