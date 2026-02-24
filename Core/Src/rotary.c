@@ -31,9 +31,9 @@ static const int8_t encoder_lut[16] = {
 };
 
 /* ================= TIMING ================= */
-#define ENCODER_DEBOUNCE_MS   20u   /* Minimum ms between accepted detent actions */
+#define ENCODER_DEBOUNCE_MS   10u   /* Minimum ms between accepted detent actions */
 #define SW_DEBOUNCE_MS        50u   /* Minimum ms for switch state to be stable   */
-#define DETENT_THRESHOLD       4    /* Sub-steps per detent (most encoders = 4)   */
+#define DETENT_THRESHOLD       1    /* Sub-steps per detent (most encoders = 4)   */
 
 /* ================= STATE ================= */
 static volatile uint8_t  enc_state  = 0;   /* Previous AB in bits 1:0 */

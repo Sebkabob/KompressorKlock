@@ -311,7 +311,7 @@ void Screen_Init(void)
     memset(&sm, 0, sizeof(sm));
     sm.state = STATE_IDLE;
     sm.current_screen = 0;
-    sm.auto_cycle = true;
+    sm.auto_cycle = false;
     sm.auto_cycle_transition = TRANSITION_SLIDE_LEFT;
     sm.last_cycle_time = HAL_GetTick();
     sm.dirty = true;
