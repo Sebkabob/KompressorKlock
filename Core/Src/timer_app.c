@@ -5,24 +5,13 @@
 
 /* =====================================================================
  *  STOPWATCH
- *
- *  Press = start / pause / resume
- *  Long press (1s) = reset to zero (any state)
- *  Scroll = ALWAYS navigates screens (never claimed)
- *
- *  Display format (handled by screen_impl):
- *    < 60s:   SS.cc          e.g. "05.23"
- *    < 60m:   M:SS.cc        e.g. "1:05.23"
- *    >= 60m:  H:MM:SS.cc     e.g. "1:00:00.23"
- *
- *  Updates every 10ms for centisecond display.
  * =====================================================================*/
 
 static StopwatchState_t sw_state = SW_STATE_STOPPED;
-static uint32_t sw_elapsed_ms   = 0;   /* accumulated while paused */
-static uint32_t sw_start_tick   = 0;   /* HAL_GetTick when started/resumed */
+static uint32_t sw_elapsed_ms   = 0;
+static uint32_t sw_start_tick   = 0;
 static bool     sw_dirty        = true;
-static uint8_t  sw_last_cs      = 0xFF; /* last displayed centisecond */
+static uint8_t  sw_last_cs      = 0xFF;
 
 void Stopwatch_Init(void)
 {
@@ -45,7 +34,6 @@ void Stopwatch_Update(void)
 {
     if (sw_state != SW_STATE_RUNNING) return;
 
-    /* Redraw every 10ms (centisecond change) */
     uint32_t total = Stopwatch_GetTotalMs();
     uint8_t cs = (total / 10) % 100;
 
@@ -80,7 +68,6 @@ void Stopwatch_OnPress(void)
 
 void Stopwatch_OnLongPress(void)
 {
-    /* Reset from any state */
     sw_elapsed_ms = 0;
     sw_start_tick = 0;
     sw_state = SW_STATE_STOPPED;
@@ -100,27 +87,17 @@ bool Stopwatch_NeedsRedraw(void)
 
 /* =====================================================================
  *  COUNTDOWN
- *
- *  IDLE:     Shows previous set time (or 00:00:00 on first use).
- *            Press → SETTING (pre-populated with last set time).
- *  SETTING:  Blinking field editor. Scroll adjusts value, press
- *            advances to next field. After last field press → RUNNING.
- *            Long press → IDLE (cancel).
- *  RUNNING:  Counting down. Press → PAUSED. Scroll navigates away freely.
- *  PAUSED:   Frozen. Press → RUNNING (resume). Long press → IDLE (clear).
- *  FINISHED: Beeping/flashing. Scroll navigates away freely.
- *            Press → IDLE (dismiss alarm).
  * =====================================================================*/
 
 static CountdownState_t cd_state = CD_STATE_IDLE;
 static CountdownField_t cd_field = CD_FIELD_HOURS;
 
-/* The "last set" values — remembered across resets */
+/* Remembered "last set" values — persist across resets */
 static uint8_t cd_last_hours   = 0;
-static uint8_t cd_last_minutes = 5;   /* Default 5 min on first use */
+static uint8_t cd_last_minutes = 5;
 static uint8_t cd_last_seconds = 0;
 
-/* Current editing values (copied from last_* on SETTING enter) */
+/* Current editing values */
 static uint8_t cd_set_hours   = 0;
 static uint8_t cd_set_minutes = 0;
 static uint8_t cd_set_seconds = 0;
@@ -190,12 +167,12 @@ void Countdown_Update(void)
             cd_dirty = true;
         }
 
-        /* Play alarm, repeat every 2s */
+        /* Play alarm immediately, then repeat every 1.5s */
         if (!cd_alarm_played) {
             Buzzer_BeepAlarm();
             cd_alarm_played = true;
             cd_last_alarm_tick = now;
-        } else if (now - cd_last_alarm_tick >= 2000) {
+        } else if (now - cd_last_alarm_tick >= 1500) {
             if (!Buzzer_IsPlaying()) {
                 Buzzer_BeepAlarm();
             }
@@ -216,7 +193,6 @@ void Countdown_OnPress(void)
 {
     switch (cd_state) {
         case CD_STATE_IDLE:
-            /* Enter setting mode, pre-populate with last set time */
             cd_state = CD_STATE_SETTING;
             cd_field = CD_FIELD_HOURS;
             cd_set_hours   = cd_last_hours;
@@ -229,26 +205,22 @@ void Countdown_OnPress(void)
 
         case CD_STATE_SETTING:
             if (cd_field < CD_FIELD_SECONDS) {
-                /* Advance to next field */
                 cd_field++;
                 cd_blink_on = true;
                 cd_blink_tick = HAL_GetTick();
                 cd_dirty = true;
             } else {
-                /* Last field — start the countdown */
                 uint32_t total_ms = ((uint32_t)cd_set_hours * 3600 +
                                      (uint32_t)cd_set_minutes * 60 +
                                      (uint32_t)cd_set_seconds) * 1000;
 
                 if (total_ms == 0) {
-                    /* Can't start a zero timer — beep and reset to hours */
                     Buzzer_BeepDouble();
                     cd_field = CD_FIELD_HOURS;
                     cd_dirty = true;
                     return;
                 }
 
-                /* Save as "last set" for next time */
                 cd_last_hours   = cd_set_hours;
                 cd_last_minutes = cd_set_minutes;
                 cd_last_seconds = cd_set_seconds;
@@ -275,7 +247,6 @@ void Countdown_OnPress(void)
             break;
 
         case CD_STATE_FINISHED:
-            /* Dismiss alarm */
             Buzzer_Stop();
             cd_state = CD_STATE_IDLE;
             cd_dirty = true;
@@ -323,7 +294,6 @@ void Countdown_OnScroll(int direction)
 
 void Countdown_OnLongPress(void)
 {
-    /* Clear back to idle from paused or running */
     if (cd_state == CD_STATE_PAUSED || cd_state == CD_STATE_RUNNING ||
         cd_state == CD_STATE_SETTING) {
         cd_state = CD_STATE_IDLE;

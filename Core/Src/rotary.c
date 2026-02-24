@@ -15,8 +15,8 @@ static const int8_t encoder_lut[16] = {
 #define ENCODER_DEBOUNCE_MS   20u
 #define SW_DEBOUNCE_MS        50u
 #define DETENT_THRESHOLD       4
-#define TIMER_HOLD_MS       1000u   /* 1s hold = timer reset/clear */
-#define LONG_PRESS_MS       2000u   /* 2s hold = settings entry */
+#define TIMER_HOLD_MS       1000u
+#define LONG_PRESS_MS       2000u
 
 /* ================= INTERACTIVE SCREEN TRACKING ================= */
 static int stopwatch_screen_index = -1;
@@ -35,12 +35,11 @@ static bool on_countdown_screen(void)
     return (Screen_GetCurrent() == countdown_screen_index && countdown_screen_index >= 0);
 }
 
-/**
- * @brief Should scroll be claimed (not used for screen navigation)?
- *
- * Only claimed during countdown SETTING mode when on the countdown screen.
- * All other states (including FINISHED): scroll navigates screens freely.
- */
+static bool on_timer_screen(void)
+{
+    return on_stopwatch_screen() || on_countdown_screen();
+}
+
 static bool scroll_claimed(void)
 {
     if (on_countdown_screen()) {
@@ -61,10 +60,19 @@ static bool     sw_stable      = true;
 static uint32_t sw_change_tick = 0;
 static bool     sw_pressed_flag = false;
 
-/* Hold tracking */
 static bool     sw_held          = false;
 static uint32_t sw_held_since    = 0;
 static bool     sw_hold_consumed = false;
+
+static uint8_t  bar_height = 0;
+
+/* Helper: consume hold and clear bar in one place */
+static void consume_hold(void)
+{
+    sw_hold_consumed = true;
+    bar_height = 0;
+    Screen_MarkDirty();
+}
 
 /* ================= ISR ================= */
 
@@ -101,6 +109,7 @@ void Rotary_Init(void)
     last_step_tick  = HAL_GetTick();
     step_accum      = 0;
     pending_steps   = 0;
+    bar_height      = 0;
 
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
@@ -128,6 +137,32 @@ void Rotary_Update(void)
     uint32_t now = HAL_GetTick();
     bool in_settings = (Settings_GetState() != SETTINGS_STATE_INACTIVE);
 
+    /* ---- Countdown alarm: force-jump to countdown screen ---- */
+    if (countdown_screen_index >= 0 &&
+        Countdown_GetState() == CD_STATE_FINISHED &&
+        !in_settings) {
+        if (Screen_GetCurrent() != countdown_screen_index) {
+            Screen_SetCurrent(countdown_screen_index);
+            Screen_MarkDirty();
+        }
+    }
+
+    /* ---- Press bar: update hold height ---- */
+    if (sw_held && !sw_hold_consumed) {
+        uint32_t held_ms = now - sw_held_since;
+        uint32_t fill_ms = on_timer_screen() ? TIMER_HOLD_MS : LONG_PRESS_MS;
+        uint8_t h = (uint8_t)(held_ms * 8 / fill_ms);
+        if (h > 7) h = 7;
+
+        if (h != bar_height) {
+            bar_height = h;
+            Screen_MarkDirty();
+        }
+    } else if (bar_height != 0) {
+        bar_height = 0;
+        Screen_MarkDirty();
+    }
+
     /* ---- Encoder ---- */
     {
         __disable_irq();
@@ -140,7 +175,6 @@ void Rotary_Update(void)
         if ((now - last_step_tick) >= ENCODER_DEBOUNCE_MS)
         {
             if (in_settings) {
-                /* Settings mode: scroll adjusts settings */
                 while (pending_steps >= DETENT_THRESHOLD) {
                     Settings_OnScroll(-1);
                     Screen_MarkDirty();
@@ -154,7 +188,6 @@ void Rotary_Update(void)
                     last_step_tick = now;
                 }
             } else if (scroll_claimed()) {
-                /* Countdown SETTING mode: scroll adjusts field values */
                 while (pending_steps >= DETENT_THRESHOLD) {
                     Countdown_OnScroll(-1);
                     Screen_MarkDirty();
@@ -168,8 +201,6 @@ void Rotary_Update(void)
                     last_step_tick = now;
                 }
             } else {
-                /* Normal screen navigation — always works, even during
-                 * stopwatch running, countdown running/paused/finished */
                 if (!Screen_IsTransitioning()) {
                     if (pending_steps >= DETENT_THRESHOLD) {
                         Screen_Next(TRANSITION_SLIDE_UP);
@@ -204,15 +235,18 @@ void Rotary_Update(void)
                     sw_held = true;
                     sw_held_since = now;
                     sw_hold_consumed = false;
+                    bar_height = 0;
 
-                    /* Instant press-on-down for settings OK field */
                     if (in_settings && Settings_IsOnOK()) {
                         Settings_OnPress();
-                        Screen_MarkDirty();
-                        sw_hold_consumed = true;
+                        consume_hold();
                     }
                 } else {
-                    /* Button just released — short press */
+                    /* Button just released */
+                    sw_held = false;
+                    bar_height = 0;
+                    Screen_MarkDirty();
+
                     if (was_held && !sw_hold_consumed) {
                         if (in_settings) {
                             Settings_OnPress();
@@ -227,7 +261,6 @@ void Rotary_Update(void)
                             sw_pressed_flag = true;
                         }
                     }
-                    sw_held = false;
                 }
             }
         }
@@ -236,35 +269,22 @@ void Rotary_Update(void)
         if (sw_held && !sw_hold_consumed) {
             uint32_t held_ms = now - sw_held_since;
 
-            /*
-             * 1-second hold: timer reset/clear
-             *   Stopwatch: reset from any state
-             *   Countdown: clear from setting, running, or paused
-             */
             if (held_ms >= TIMER_HOLD_MS && held_ms < LONG_PRESS_MS) {
                 if (!in_settings) {
                     if (on_stopwatch_screen()) {
                         Stopwatch_OnLongPress();
-                        Screen_MarkDirty();
-                        sw_hold_consumed = true;
+                        consume_hold();
                     } else if (on_countdown_screen()) {
                         CountdownState_t cds = Countdown_GetState();
                         if (cds == CD_STATE_SETTING || cds == CD_STATE_PAUSED ||
                             cds == CD_STATE_RUNNING) {
                             Countdown_OnLongPress();
-                            Screen_MarkDirty();
-                            sw_hold_consumed = true;
+                            consume_hold();
                         }
                     }
                 }
             }
-            /*
-             * 2-second hold: settings entry/exit
-             * Blocked on active timer screens (running/paused/setting/finished).
-             */
             else if (held_ms >= LONG_PRESS_MS) {
-                sw_hold_consumed = true;
-
                 bool timer_busy = false;
                 if (on_stopwatch_screen()) {
                     StopwatchState_t sws = Stopwatch_GetState();
@@ -285,6 +305,7 @@ void Rotary_Update(void)
                         Screen_EnterSettings();
                     }
                 }
+                consume_hold();
             }
         }
     }
@@ -299,4 +320,9 @@ bool Rotary_SWPressed(void)
         return true;
     }
     return false;
+}
+
+uint8_t Rotary_GetBarHeight(void)
+{
+    return bar_height;
 }

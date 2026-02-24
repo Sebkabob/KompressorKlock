@@ -1,5 +1,6 @@
 #include "screens.h"
 #include "settings.h"
+#include "rotary.h"
 #include "matrix.h"
 #include "main.h"
 #include <string.h>
@@ -44,7 +45,7 @@ typedef struct {
 
     // Settings mode
     bool                in_settings;
-    int                 saved_screen;       /* Screen to return to after settings */
+    int                 saved_screen;
 
     // Offscreen buffers (only used during transitions)
     uint8_t             buf_current[NUM_ROWS][TOTAL_BYTES];
@@ -55,6 +56,30 @@ typedef struct {
 } ScreenManager_t;
 
 static ScreenManager_t sm;
+
+/* ================= PRESS BAR OVERLAY ================= */
+/*
+ * Draws a 1-pixel-wide bar on the rightmost column (col 83).
+ * Fills from bottom (row 6) upward based on Rotary_GetBarHeight().
+ * Height 0 = nothing, 7 = full column.
+ */
+static void draw_press_bar(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    uint8_t h = Rotary_GetBarHeight();
+    if (h == 0) return;
+    if (h > NUM_ROWS) h = NUM_ROWS;
+
+    /* col 83 = byte 10, bit 3 */
+    const int col = NUM_COLS - 1;  /* 83 */
+    int byte_idx = col / 8;        /* 10 */
+    uint8_t bit_mask = 1u << (col % 8);  /* bit 3 */
+
+    /* Fill from bottom (row 6) up for h pixels */
+    for (uint8_t i = 0; i < h; i++) {
+        int row = (NUM_ROWS - 1) - i;
+        buf[row][byte_idx] |= bit_mask;
+    }
+}
 
 /* ================= DISSOLVE SHUFFLE ================= */
 
@@ -134,6 +159,7 @@ static void render_slide_horizontal(int offset, bool slide_left)
         }
     }
 
+    draw_press_bar(composite);
     Matrix_LoadBuffer(composite);
 }
 
@@ -167,6 +193,7 @@ static void render_slide_vertical(int offset, bool slide_up)
         memcpy(composite[r], src_buf[src_r], TOTAL_BYTES);
     }
 
+    draw_press_bar(composite);
     Matrix_LoadBuffer(composite);
 }
 
@@ -187,6 +214,7 @@ static bool render_dissolve(void)
             uint16_t idx = sm.dissolve_order[i];
             set_pixel(composite, idx / NUM_COLS, idx % NUM_COLS, 0);
         }
+        draw_press_bar(composite);
         Matrix_LoadBuffer(composite);
 
         if (target_count >= TOTAL_PIXELS) {
@@ -208,6 +236,7 @@ static bool render_dissolve(void)
                 set_pixel(composite, r, c, 1);
             }
         }
+        draw_press_bar(composite);
         Matrix_LoadBuffer(composite);
 
         return (target_count >= TOTAL_PIXELS);
@@ -274,7 +303,6 @@ static void run_transition(void)
 
 static void begin_transition_with_buffers(TransitionType_t transition)
 {
-    /* buf_current and buf_target must already be filled by the caller */
     sm.state = STATE_TRANSITIONING;
     sm.active_transition = transition;
     sm.transition_start = HAL_GetTick();
@@ -312,9 +340,6 @@ static void begin_transition(int target, TransitionType_t transition)
 
 /* ================= SETTINGS MODE TRANSITIONS ================= */
 
-/**
- * @brief Render the current settings screen into a buffer.
- */
 static void render_settings_buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     memset(buf, 0, NUM_ROWS * TOTAL_BYTES);
@@ -328,16 +353,13 @@ void Screen_EnterSettings(void)
     sm.saved_screen = sm.current_screen;
     sm.in_settings = true;
 
-    /* Build current screen buffer */
     memset(sm.buf_current, 0, sizeof(sm.buf_current));
     if (sm.screens[sm.current_screen]) {
         sm.screens[sm.current_screen](sm.buf_current);
     }
 
-    /* Build settings menu buffer */
     render_settings_buf(sm.buf_target);
 
-    /* We don't change target_screen — settings is a virtual overlay */
     begin_transition_with_buffers(TRANSITION_DISSOLVE);
 }
 
@@ -347,10 +369,8 @@ void Screen_ExitSettings(void)
 
     sm.in_settings = false;
 
-    /* Build current settings buffer */
     render_settings_buf(sm.buf_current);
 
-    /* Build restored clock screen buffer */
     memset(sm.buf_target, 0, sizeof(sm.buf_target));
     if (sm.screens[sm.saved_screen]) {
         sm.screens[sm.saved_screen](sm.buf_target);
@@ -412,7 +432,6 @@ void Screen_Update(void)
 
     /* In settings mode: render settings screens */
     if (sm.in_settings) {
-        /* Check if settings needs redraw (blink timers, etc.) */
         if (Settings_NeedsRedraw()) {
             sm.dirty = true;
         }
@@ -420,6 +439,7 @@ void Screen_Update(void)
         if (sm.dirty) {
             uint8_t buf[NUM_ROWS][TOTAL_BYTES];
             render_settings_buf(buf);
+            draw_press_bar(buf);
             Matrix_LoadBuffer(buf);
             sm.dirty = false;
         }
@@ -433,6 +453,7 @@ void Screen_Update(void)
         if (sm.screens[sm.current_screen]) {
             sm.screens[sm.current_screen](buf);
         }
+        draw_press_bar(buf);
         Matrix_LoadBuffer(buf);
         sm.dirty = false;
     }
@@ -475,7 +496,6 @@ void Screen_SetCurrent(int index)
     if (index >= 0 && index < sm.screen_count) {
         sm.current_screen = index;
         sm.dirty = true;
-        /* Cancel any in-progress transition */
         sm.state = STATE_IDLE;
     }
 }

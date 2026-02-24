@@ -27,7 +27,7 @@ typedef enum {
     CD_STATE_SETTING,    /* Editing H:M:S, scroll adjusts, press advances field */
     CD_STATE_RUNNING,    /* Counting down, press to pause */
     CD_STATE_PAUSED,     /* Frozen, press to resume, hold 1s to clear back to idle */
-    CD_STATE_FINISHED    /* Time's up, beeping/flashing, scroll away freely, press to dismiss */
+    CD_STATE_FINISHED    /* Time's up — alarm active. Press to dismiss. */
 } CountdownState_t;
 
 typedef enum {
@@ -41,7 +41,7 @@ void Countdown_Init(void);
 void Countdown_Update(void);
 void Countdown_OnPress(void);
 void Countdown_OnScroll(int direction);
-void Countdown_OnLongPress(void);    /* Hold 1s = clear (when paused or running) */
+void Countdown_OnLongPress(void);
 CountdownState_t Countdown_GetState(void);
 CountdownField_t Countdown_GetField(void);
 uint8_t Countdown_GetHours(void);
