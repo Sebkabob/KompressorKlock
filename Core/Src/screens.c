@@ -1,4 +1,5 @@
 #include "screens.h"
+#include "settings.h"
 #include "matrix.h"
 #include "main.h"
 #include <string.h>
@@ -28,7 +29,7 @@ typedef struct {
     // Transition
     TransitionType_t    active_transition;
     uint32_t            transition_start;
-    int                 last_offset;        // Track last rendered offset to avoid redundant redraws
+    int                 last_offset;
     DissolvePhase_t     dissolve_phase;
     uint32_t            dissolve_phase_start;
     int                 last_dissolve_count;
@@ -40,6 +41,10 @@ typedef struct {
 
     // Dirty flag
     bool                dirty;
+
+    // Settings mode
+    bool                in_settings;
+    int                 saved_screen;       /* Screen to return to after settings */
 
     // Offscreen buffers (only used during transitions)
     uint8_t             buf_current[NUM_ROWS][TOTAL_BYTES];
@@ -170,16 +175,13 @@ static bool render_dissolve(void)
     uint32_t elapsed = HAL_GetTick() - sm.dissolve_phase_start;
     uint8_t composite[NUM_ROWS][TOTAL_BYTES];
 
-    // Calculate how many pixels should be processed based on time
     int target_count = (int)((uint32_t)elapsed * TOTAL_PIXELS / DISSOLVE_PHASE_MS);
     if (target_count > TOTAL_PIXELS) target_count = TOTAL_PIXELS;
 
-    // Skip if nothing changed since last render
     if (target_count == sm.last_dissolve_count) return false;
     sm.last_dissolve_count = target_count;
 
     if (sm.dissolve_phase == DISSOLVE_PHASE_OUT) {
-        // Start from current, black out pixels
         memcpy(composite, sm.buf_current, sizeof(composite));
         for (int i = 0; i < target_count; i++) {
             uint16_t idx = sm.dissolve_order[i];
@@ -197,7 +199,6 @@ static bool render_dissolve(void)
         return false;
 
     } else {
-        // Start from black, reveal target pixels
         memset(composite, 0, sizeof(composite));
         for (int i = 0; i < target_count; i++) {
             uint16_t idx = sm.dissolve_order[i];
@@ -223,13 +224,11 @@ static void run_transition(void)
     switch (sm.active_transition) {
         case TRANSITION_SLIDE_LEFT:
         case TRANSITION_SLIDE_RIGHT: {
-            // Time-based: calculate pixel offset from elapsed time
             int offset = (int)((uint32_t)elapsed * NUM_COLS / SLIDE_H_DURATION_MS);
             if (offset >= NUM_COLS) {
                 offset = NUM_COLS;
                 done = true;
             }
-            // Only re-render if offset actually changed
             if (offset != sm.last_offset) {
                 sm.last_offset = offset;
                 render_slide_horizontal(offset,
@@ -273,6 +272,23 @@ static void run_transition(void)
 
 /* ================= START A TRANSITION ================= */
 
+static void begin_transition_with_buffers(TransitionType_t transition)
+{
+    /* buf_current and buf_target must already be filled by the caller */
+    sm.state = STATE_TRANSITIONING;
+    sm.active_transition = transition;
+    sm.transition_start = HAL_GetTick();
+    sm.last_offset = -1;
+    sm.last_dissolve_count = -1;
+
+    if (transition == TRANSITION_DISSOLVE) {
+        sm.dissolve_phase = DISSOLVE_PHASE_OUT;
+        sm.dissolve_phase_start = HAL_GetTick();
+        shuffle_rng = 0xACE1 ^ (uint16_t)HAL_GetTick();
+        shuffle_dissolve_order();
+    }
+}
+
 static void begin_transition(int target, TransitionType_t transition)
 {
     if (sm.state == STATE_TRANSITIONING) return;
@@ -280,11 +296,6 @@ static void begin_transition(int target, TransitionType_t transition)
     if (target == sm.current_screen && transition != TRANSITION_NONE) return;
 
     sm.target_screen = target;
-    sm.active_transition = transition;
-    sm.state = STATE_TRANSITIONING;
-    sm.transition_start = HAL_GetTick();
-    sm.last_offset = -1;
-    sm.last_dissolve_count = -1;
 
     memset(sm.buf_current, 0, sizeof(sm.buf_current));
     memset(sm.buf_target, 0, sizeof(sm.buf_target));
@@ -296,12 +307,57 @@ static void begin_transition(int target, TransitionType_t transition)
         sm.screens[sm.target_screen](sm.buf_target);
     }
 
-    if (transition == TRANSITION_DISSOLVE) {
-        sm.dissolve_phase = DISSOLVE_PHASE_OUT;
-        sm.dissolve_phase_start = HAL_GetTick();
-        shuffle_rng = 0xACE1 ^ (uint16_t)HAL_GetTick();
-        shuffle_dissolve_order();
+    begin_transition_with_buffers(transition);
+}
+
+/* ================= SETTINGS MODE TRANSITIONS ================= */
+
+/**
+ * @brief Render the current settings screen into a buffer.
+ */
+static void render_settings_buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    memset(buf, 0, NUM_ROWS * TOTAL_BYTES);
+    Settings_Render(buf);
+}
+
+void Screen_EnterSettings(void)
+{
+    if (sm.state == STATE_TRANSITIONING) return;
+
+    sm.saved_screen = sm.current_screen;
+    sm.in_settings = true;
+
+    /* Build current screen buffer */
+    memset(sm.buf_current, 0, sizeof(sm.buf_current));
+    if (sm.screens[sm.current_screen]) {
+        sm.screens[sm.current_screen](sm.buf_current);
     }
+
+    /* Build settings menu buffer */
+    render_settings_buf(sm.buf_target);
+
+    /* We don't change target_screen — settings is a virtual overlay */
+    begin_transition_with_buffers(TRANSITION_DISSOLVE);
+}
+
+void Screen_ExitSettings(void)
+{
+    if (sm.state == STATE_TRANSITIONING) return;
+
+    sm.in_settings = false;
+
+    /* Build current settings buffer */
+    render_settings_buf(sm.buf_current);
+
+    /* Build restored clock screen buffer */
+    memset(sm.buf_target, 0, sizeof(sm.buf_target));
+    if (sm.screens[sm.saved_screen]) {
+        sm.screens[sm.saved_screen](sm.buf_target);
+    }
+
+    sm.target_screen = sm.saved_screen;
+    begin_transition_with_buffers(TRANSITION_DISSOLVE);
 }
 
 /* ================= PUBLIC API ================= */
@@ -315,6 +371,8 @@ void Screen_Init(void)
     sm.auto_cycle_transition = TRANSITION_SLIDE_LEFT;
     sm.last_cycle_time = HAL_GetTick();
     sm.dirty = true;
+    sm.in_settings = false;
+    sm.saved_screen = 0;
 }
 
 int Screen_Register(ScreenRenderFunc_t render_func)
@@ -345,13 +403,30 @@ void Screen_Prev(TransitionType_t transition)
 
 void Screen_Update(void)
 {
-    if (sm.screen_count == 0) return;
+    if (sm.screen_count == 0 && !sm.in_settings) return;
 
     if (sm.state == STATE_TRANSITIONING) {
         run_transition();
         return;
     }
 
+    /* In settings mode: render settings screens */
+    if (sm.in_settings) {
+        /* Check if settings needs redraw (blink timers, etc.) */
+        if (Settings_NeedsRedraw()) {
+            sm.dirty = true;
+        }
+
+        if (sm.dirty) {
+            uint8_t buf[NUM_ROWS][TOTAL_BYTES];
+            render_settings_buf(buf);
+            Matrix_LoadBuffer(buf);
+            sm.dirty = false;
+        }
+        return;
+    }
+
+    /* Normal mode */
     if (sm.dirty) {
         uint8_t buf[NUM_ROWS][TOTAL_BYTES];
         memset(buf, 0, sizeof(buf));

@@ -20,7 +20,7 @@ typedef enum {
 typedef void (*ScreenRenderFunc_t)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 /* ================= CONFIGURATION ================= */
-#define MAX_SCREENS              8
+#define MAX_SCREENS              12
 #define AUTO_CYCLE_INTERVAL_MS   10000
 
 // Time-based transition speeds (in milliseconds)
@@ -42,5 +42,17 @@ void Screen_SetAutoCycleTransition(TransitionType_t transition);
 int  Screen_GetCurrent(void);
 bool Screen_IsTransitioning(void);
 void Screen_MarkDirty(void);
+
+/**
+ * @brief Enter settings mode with dissolve transition.
+ *        Saves current screen index and switches to settings renderer.
+ */
+void Screen_EnterSettings(void);
+
+/**
+ * @brief Exit settings mode with dissolve transition.
+ *        Restores the screen that was active before entering settings.
+ */
+void Screen_ExitSettings(void);
 
 #endif // SCREENS_H
