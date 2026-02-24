@@ -19,6 +19,7 @@
 #include "sensor_manager.h"
 #include "screens.h"
 #include "screen_impl.h"
+#include "rotary.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -94,6 +95,7 @@ int main(void)
 
   // Initialize display
   Matrix_Init();
+  Rotary_Init();
   HAL_TIM_Base_Start_IT(&htim3);
 
   HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
@@ -105,21 +107,21 @@ int main(void)
   Screen_Init();
 //  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
   // Uncomment to enable additional screens:
-  // Screen_Register(Screen_Logo);
-  // Screen_Register(Screen_Logo2);
-  // Screen_Register(Screen_Time);
-//   Screen_Register(Screen_TimeTempHumid);
-//   Screen_Register(Screen_Battery);
-//  Screen_Register(Screen_Battery2);
-  // Screen_Register(Screen_TempHumid);
-//   Screen_Register(Screen_TimeLight);
-//   Screen_Register(Screen_TimeDate);
-//   Screen_Register(Screen_LightDebug);
+   Screen_Register(Screen_Logo);
+   Screen_Register(Screen_Logo2);
+   Screen_Register(Screen_Time);
+   Screen_Register(Screen_TimeTempHumid);
+   Screen_Register(Screen_Battery);
+  Screen_Register(Screen_Battery2);
+   Screen_Register(Screen_TempHumid);
+   Screen_Register(Screen_TimeLight);
+   Screen_Register(Screen_TimeDate);
+   Screen_Register(Screen_LightDebug);
      Screen_Register(Screen_TimeTempBatt);
 
 
-  Screen_SetAutoCycle(true);
-  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
+//  Screen_SetAutoCycle(false);
+//  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
 
   /* USER CODE END 2 */
 
@@ -133,6 +135,8 @@ int main(void)
 
 	    // Update all sensor readings
 	    SensorManager_Update();
+
+	    Rotary_Update();
 
 	    // Mark screen dirty if sensor data changed
 	    if (SensorManager_HasChanged()) {
@@ -262,7 +266,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 15;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 259;
+  htim3.Init.Period = 999;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -338,17 +342,23 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : ROT_B_Pin STAT1_Pin STAT2_Pin */
-  GPIO_InitStruct.Pin = ROT_B_Pin|STAT1_Pin|STAT2_Pin;
+  /*Configure GPIO pin : ROT_B_Pin */
+  GPIO_InitStruct.Pin = ROT_B_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(ROT_B_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : ROT_A_Pin ROT_SW_Pin */
   GPIO_InitStruct.Pin = ROT_A_Pin|ROT_SW_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : STAT1_Pin STAT2_Pin */
+  GPIO_InitStruct.Pin = STAT1_Pin|STAT2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPOUT_Pin */
   GPIO_InitStruct.Pin = GPOUT_Pin;
