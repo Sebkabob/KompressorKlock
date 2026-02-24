@@ -38,6 +38,9 @@ typedef struct {
 
 #define NUM_BREAKPOINTS 5
 
+static bool auto_brightness_enabled = true;
+static uint8_t manual_brightness_percent = 50;
+
 static const BrightnessBreakpoint_t brightness_map[NUM_BREAKPOINTS] = {
     /*  light%   brightness
      *  ------   ----------  */
@@ -46,6 +49,11 @@ static const BrightnessBreakpoint_t brightness_map[NUM_BREAKPOINTS] = {
     {   14,        95  },   /* Dim room (evening, indirect lighting) */
     {   35,       150  },   /* Normal room (daytime, overhead lights) */
     {  100,       255  },   /* Bright (direct light, window, lamp nearby) */
+//	    {    0,         1  },   /* Pitch dark: very dim but still readable */
+//	    {   2,         70  },   /* Dark room (nighttime, lights off nearby) */
+//	    {   6,        120  },   /* Dim room (evening, indirect lighting) */
+//	    {   8,       190  },   /* Normal room (daytime, overhead lights) */
+//	    {  12,       255  },   /* Bright (direct light, window, lamp nearby) */
 };
 
 /**
@@ -141,7 +149,7 @@ static void update_time(void)
     static uint32_t last_update = 0;
     uint32_t now = HAL_GetTick();
 
-    if (now - last_update < 200) return;
+    if (now - last_update < 50) return;
     last_update = now;
 
     if (RV3032_UpdateTime()) {
@@ -158,12 +166,36 @@ static void update_temperature(void)
     static uint32_t last_update = 0;
     uint32_t now = HAL_GetTick();
 
-    if (now - last_update < 300) return;
+    if (now - last_update < 100) return;
     last_update = now;
 
     SHT40_UpdateReadings();
-    sensor_data.temp_f = (int)SHT40_GetTemperatureF();
-    sensor_data.humidity = SHT40_GetHumidity();
+
+    /*
+     * Hysteresis: only update the displayed integer when the float
+     * reading has moved more than the threshold away from the current
+     * displayed value. This prevents rapid flickering when the true
+     * value sits near X.25 (e.g., 70.5°F toggling between 70 and 71).
+     *
+     * A threshold of 0.5 means:
+     *   - Displaying 70 → stays 70 until raw reaches 70.25 or 69.75
+     *   - Then snaps to 71 (or 69) and stays until it drifts 0.25 away again
+     */
+    #define TEMP_HYSTERESIS  0.25f
+    #define HUM_HYSTERESIS   0.25f
+
+    float raw_temp_f = SHT40_GetTemperatureF();
+    float raw_humidity = SHT40_GetHumidity();
+
+    float temp_diff = raw_temp_f - (float)sensor_data.temp_f;
+    if (temp_diff > TEMP_HYSTERESIS || temp_diff < -TEMP_HYSTERESIS) {
+        sensor_data.temp_f = (int)raw_temp_f;
+    }
+
+    float hum_diff = raw_humidity - (float)sensor_data.humidity;
+    if (hum_diff > HUM_HYSTERESIS || hum_diff < -HUM_HYSTERESIS) {
+        sensor_data.humidity = (int)raw_humidity;
+    }
 }
 
 static void update_light(void)
@@ -173,17 +205,30 @@ static void update_light(void)
     uint32_t now = HAL_GetTick();
 
     /* --- Read light sensor every 100ms --- */
-    if (now - last_sensor_read >= 100) {
-        LTR_329_UpdateReadings();
-        last_sensor_read = now;
+        if (now - last_sensor_read >= 100) {
+            LTR_329_UpdateReadings();
+            last_sensor_read = now;
 
-        /* Get filtered light level and map through breakpoints */
-        uint8_t light = LTR_329_GetLightPercent();
-        uint8_t mapped = map_brightness(light);
+            /* Only update target from sensor when in auto mode */
+            if (auto_brightness_enabled) {
+                uint8_t light = LTR_329_GetLightPercent();
+                uint8_t mapped = map_brightness(light);
 
-        target_brightness = mapped;
-        debug_mapped_brightness = mapped;
-    }
+                target_brightness = mapped;
+                debug_mapped_brightness = mapped;
+            }
+        }
+
+        /* --- Smooth brightness toward target every SMOOTH_INTERVAL_MS --- */
+        /* (only smooth in auto mode; manual sets brightness instantly) */
+        if (!auto_brightness_enabled) {
+            /* Update light percentage for display but skip smoothing */
+            if (now - last_update >= 77) {
+                last_update = now;
+                sensor_data.light_percent = LTR_329_GetLightPercent();
+            }
+            return;
+        }
 
     /* --- Smooth brightness toward target every SMOOTH_INTERVAL_MS --- */
     if (now - last_smooth_tick >= SMOOTH_INTERVAL_MS) {
@@ -285,6 +330,48 @@ bool SensorManager_HasChanged(void)
     bool changed = data_changed;
     data_changed = false;
     return changed;
+}
+
+void SensorManager_SetAutoBrightness(bool enabled)
+{
+    auto_brightness_enabled = enabled;
+    if (!enabled) {
+        /* Apply manual brightness immediately */
+        uint8_t brightness = (uint8_t)((uint16_t)manual_brightness_percent * 255 / 100);
+        if (brightness < 1) brightness = 1;
+        target_brightness = brightness;
+        current_brightness_x16 = (int16_t)brightness << 4;
+        Matrix_SetBrightness(brightness);
+        debug_current_brightness = brightness;
+        debug_mapped_brightness = brightness;
+    }
+}
+
+bool SensorManager_IsAutoBrightness(void)
+{
+    return auto_brightness_enabled;
+}
+
+void SensorManager_SetManualBrightnessPercent(uint8_t percent)
+{
+    if (percent < 1) percent = 1;
+    if (percent > 100) percent = 100;
+    manual_brightness_percent = percent;
+
+    if (!auto_brightness_enabled) {
+        uint8_t brightness = (uint8_t)((uint16_t)percent * 255 / 100);
+        if (brightness < 1) brightness = 1;
+        target_brightness = brightness;
+        current_brightness_x16 = (int16_t)brightness << 4;
+        Matrix_SetBrightness(brightness);
+        debug_current_brightness = brightness;
+        debug_mapped_brightness = brightness;
+    }
+}
+
+uint8_t SensorManager_GetManualBrightnessPercent(void)
+{
+    return manual_brightness_percent;
 }
 
 /* ================= DEBUG ACCESSORS ================= */

@@ -3,19 +3,41 @@
 
 /* ================= FRAMEBUFFER ================= */
 static uint8_t display_buffer[NUM_ROWS][TOTAL_BYTES];
-static uint8_t current_row = 0;
+static volatile uint8_t current_row = 0;
 
 /* ================= BRIGHTNESS ================= */
 /*
- * Brightness is controlled by a software delay in the Update ISR.
+ * Brightness via TIM3 Output Compare — zero CPU spinning.
  *
- * After shifting out row data and turning the row ON, we delay for
- * brightness_compare NOP cycles, then turn the row OFF.
+ * Timer config: prescaler=15, ARR=999 → 1 MHz clock, 1 ms period
+ * Frame rate: 1 MHz / 1000 / 7 rows = ~143 Hz (was ~55 Hz)
  *
- * Lower brightness_compare = shorter on-time = dimmer.
- * brightness_compare of 0 = display off.
+ * TIMING PER ROW PERIOD (1 ms):
+ *   1. Update interrupt (UIF, counter=0):
+ *      → All rows OFF (blanking)
+ *      → Shift out new row data (~60-70 µs)
+ *      → Turn row ON
+ *   2. Compare interrupt (CC1IF, counter=CCR1):
+ *      → Turn row OFF
+ *
+ * SHIFT_OVERHEAD (80 ticks = 80 µs at 1 MHz):
+ *   The shift-out takes ~60-70 µs. All CCR1 values in the LUT are
+ *   offset above SHIFT_OVERHEAD so the compare event ALWAYS fires
+ *   AFTER the row has been turned on. This prevents the glitch where
+ *   a small CCR1 would fire before the row was lit, leaving it on
+ *   for the entire period (bright flash).
+ *
+ *   brightness=0:   row never turns on (special case in ISR)
+ *   brightness=1:   CCR1=81 → on for 1 µs after shift completes
+ *   brightness=255: CCR1=999 → on for full period (919 µs)
  */
-static volatile uint16_t brightness_compare = 300;
+
+/* Must match MX_TIM3_Init() values in main.c */
+#define TIMER_ARR        999
+#define SHIFT_OVERHEAD    80
+
+static volatile uint16_t brightness_ccr = TIMER_ARR; /* current CCR1 value */
+static volatile uint8_t  brightness_off = 0;          /* 1 = display off   */
 
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
@@ -56,6 +78,7 @@ static const uint8_t font5x7[128][5] =
 ['<'] = {0x08, 0x14, 0x22, 0x41, 0x00},
 ['>'] = {0x00, 0x41, 0x22, 0x14, 0x08},
 ['%'] = {0x23, 0x13, 0x08, 0x64, 0x62},
+['_'] = {0x40, 0x40, 0x40, 0x40, 0x40},
 
 ['0']={0x3E,0x51,0x49,0x45,0x3E},
 ['1']={0x00,0x42,0x7F,0x40,0x00},
@@ -236,60 +259,62 @@ static inline void ShiftOutRow(const uint8_t *row_data)
     port->BRR  = RCLK_Pin;
 }
 
-/* ================= BRIGHTNESS CONTROL ================= */
-
+/* ================= BRIGHTNESS LUT ================= */
 /*
- * Brightness lookup table (256 entries).
+ * Gamma 1.8 curve, 256 entries.
+ * Maps brightness 0-255 → TIM3 CCR1 values.
  *
- * Maps brightness 0-255 to NOP delay counts using a gamma 1.8 curve.
- * This gives smooth, perceptually linear dimming with good resolution
- * at the low end (where the eye is most sensitive to changes).
+ * All non-zero entries are >= SHIFT_OVERHEAD+1 to guarantee the
+ * compare event fires AFTER the shift-out + row-on sequence.
+ * This eliminates the bright-flash glitch at low brightness.
  *
- * Generated with: delay = (i/255)^1.8 * MAX_DELAY
- * MAX_DELAY = 300 (tuned for the software delay loop)
+ * Entry 0 = 0 (special: row never turns on).
+ * Entry 255 = 999 = ARR (full period, maximum brightness).
  *
- * Key properties:
- *   brightness 0   -> delay 0   (off)
- *   brightness 1   -> delay 1   (barely visible)
- *   brightness 50  -> delay 15  (very dim, still visible gradient)
- *   brightness 128 -> delay 88  (mid)
- *   brightness 255 -> delay 300 (full)
+ * Generated with:
+ *   ccr = SHIFT_OVERHEAD + 1 + (i/255)^1.8 * (ARR - SHIFT_OVERHEAD)
+ *   clamped to [0, ARR]
  */
 static const uint16_t brightness_lut[256] = {
-      0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   2,   2,   2,   2,   2,
-      3,   3,   3,   3,   4,   4,   4,   5,   5,   5,   6,   6,   7,   7,   7,   8,
-      8,   9,   9,  10,  10,  11,  11,  12,  12,  13,  14,  14,  15,  15,  16,  17,
-     17,  18,  19,  19,  20,  21,  22,  22,  23,  24,  25,  25,  26,  27,  28,  29,
-     30,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,
-     45,  46,  47,  48,  49,  50,  52,  53,  54,  55,  56,  57,  59,  60,  61,  62,
-     64,  65,  66,  67,  69,  70,  71,  73,  74,  75,  77,  78,  80,  81,  82,  84,
-     85,  87,  88,  90,  91,  93,  94,  96,  97,  99, 100, 102, 104, 105, 107, 108,
-    110, 112, 113, 115, 117, 118, 120, 122, 123, 125, 127, 129, 130, 132, 134, 136,
-    137, 139, 141, 143, 145, 146, 148, 150, 152, 154, 156, 158, 159, 161, 163, 165,
-    167, 169, 171, 173, 175, 177, 179, 181, 183, 185, 187, 189, 191, 193, 195, 197,
-    199, 201, 204, 206, 208, 210, 212, 214, 216, 219, 221, 223, 225, 227, 230, 232,
-    234, 236, 239, 241, 243, 245, 248, 250, 252, 255, 257, 259, 261, 264, 266, 268,
-    271, 273, 275, 278, 280, 283, 285, 287, 290, 292, 295, 297, 300, 300, 300, 300,
-    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
-    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+       0,  81,  81,  81,  81,  81,  82,  82,  82,  83,  83,  84,  84,  85,  85,  86,
+      87,  88,  88,  89,  90,  91,  92,  93,  94,  95,  96,  97,  98,  99, 100, 101,
+     102, 104, 105, 106, 108, 109, 110, 112, 113, 115, 116, 118, 119, 121, 123, 124,
+     126, 128, 129, 131, 133, 135, 137, 139, 141, 142, 144, 146, 148, 151, 153, 155,
+     157, 159, 161, 163, 166, 168, 170, 173, 175, 177, 180, 182, 184, 187, 189, 192,
+     195, 197, 200, 202, 205, 208, 210, 213, 216, 219, 221, 224, 227, 230, 233, 236,
+     239, 242, 245, 248, 251, 254, 257, 260, 263, 267, 270, 273, 276, 280, 283, 286,
+     289, 293, 296, 300, 303, 307, 310, 314, 317, 321, 324, 328, 332, 335, 339, 343,
+     346, 350, 354, 358, 361, 365, 369, 373, 377, 381, 385, 389, 393, 397, 401, 405,
+     409, 413, 417, 421, 426, 430, 434, 438, 443, 447, 451, 456, 460, 464, 469, 473,
+     478, 482, 487, 491, 496, 500, 505, 509, 514, 519, 523, 528, 533, 538, 542, 547,
+     552, 557, 562, 567, 571, 576, 581, 586, 591, 596, 601, 606, 611, 617, 622, 627,
+     632, 637, 642, 648, 653, 658, 663, 669, 674, 679, 685, 690, 696, 701, 706, 712,
+     717, 723, 728, 734, 740, 745, 751, 756, 762, 768, 774, 779, 785, 791, 797, 802,
+     808, 814, 820, 826, 832, 838, 844, 850, 856, 862, 868, 874, 880, 886, 892, 898,
+     904, 911, 917, 923, 929, 936, 942, 948, 955, 961, 967, 974, 980, 987, 993, 993,
 };
 
 /**
- * @brief Set display brightness immediately (no smoothing)
+ * @brief Set display brightness
  * @param brightness 0 = display off, 1 = dimmest, 255 = full brightness
- *
- * The lookup table handles the gamma curve so the caller just
- * passes a linear 0-255 value.
  */
 void Matrix_SetBrightness(uint8_t brightness)
 {
-    brightness_compare = brightness_lut[brightness];
+    if (brightness == 0) {
+        brightness_off = 1;
+        brightness_ccr = 0;
+        TIM3->CCR1 = 0;
+    } else {
+        brightness_off = 0;
+        brightness_ccr = brightness_lut[brightness];
+        TIM3->CCR1 = brightness_ccr;
+    }
 }
 
 uint8_t Matrix_GetBrightness(void)
 {
-    /* Reverse lookup — find closest match */
-    uint16_t val = brightness_compare;
+    if (brightness_off) return 0;
+    uint16_t val = brightness_ccr;
     for (int i = 255; i >= 0; i--) {
         if (brightness_lut[i] <= val) return (uint8_t)i;
     }
@@ -299,19 +324,7 @@ uint8_t Matrix_GetBrightness(void)
 /* ================= CORE SCAN ================= */
 void Matrix_Task(void)
 {
-    static uint32_t last_scan = 0;
-    if (HAL_GetTick() - last_scan < 1) return;
-    last_scan = HAL_GetTick();
-
-    for (int r = 0; r < NUM_ROWS; r++)
-        HAL_GPIO_WritePin(GPIOA, ROW_PINS[r], GPIO_PIN_SET);
-
-    ShiftOutRow(display_buffer[current_row]);
-
-    HAL_GPIO_WritePin(GPIOA, ROW_PINS[current_row], GPIO_PIN_RESET);
-
-    current_row++;
-    if (current_row >= NUM_ROWS) current_row = 0;
+    /* No longer used — display driven entirely by TIM3 ISR. */
 }
 
 /* ================= DRAW (display buffer) ================= */
@@ -429,38 +442,45 @@ void Matrix_DrawBitmap_Buf(uint8_t dest[NUM_ROWS][TOTAL_BYTES], const uint8_t sr
             dest[r][b] = reverse_byte(src[r][b]);
 }
 
-/* ================= ISR CALLBACK ================= */
-
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+/* ================= TIM3 ISR — DIRECT REGISTER ACCESS, NO HAL ================= */
+/*
+ * Called from TIM3_IRQHandler() in stm32g0xx_it.c (bypasses HAL).
+ *
+ * UIF  (update/overflow) → blank all rows, shift data, turn ON row
+ * CC1IF (compare match)  → turn OFF row (brightness cutoff)
+ *
+ * CC1 always fires AFTER the shift completes because all LUT values
+ * are >= SHIFT_OVERHEAD. At brightness=255, CCR1=ARR=999 so CC1IF
+ * fires right at the overflow boundary — row stays on full period.
+ */
+void Matrix_TIM3_IRQHandler(void)
 {
-    if (htim->Instance == TIM3)
-    {
-        /* Turn OFF all rows */
+    uint32_t sr = TIM3->SR;
+
+    /* ---- Update (overflow): advance row, shift data, turn ON ---- */
+    if (sr & TIM_SR_UIF) {
+        TIM3->SR = ~TIM_SR_UIF;
+
+        /* Blank all rows immediately */
         GPIOA->BSRR = ALL_ROW_PINS;
 
-        __NOP(); __NOP(); __NOP(); __NOP();
-
-        /* Shift out next row data */
+        /* Shift out data for current row */
         ShiftOutRow(display_buffer[current_row]);
 
-        /* Only turn row on if brightness > 0 */
-        if (brightness_compare > 0) {
-            /* Turn ON current row */
+        /* Turn ON current row (unless brightness is zero) */
+        if (!brightness_off) {
             GPIOA->BRR = ROW_PINS[current_row];
-
-            /* Delay for brightness duration then turn off.
-             * Read brightness_compare once to avoid tearing
-             * if it changes mid-loop. */
-            uint16_t delay = brightness_compare;
-            for (volatile uint16_t i = 0; i < delay; i++) {
-                __NOP();
-            }
-
-            /* Turn OFF the row */
-            GPIOA->BSRR = ALL_ROW_PINS;
         }
 
-        current_row = (current_row + 1) % NUM_ROWS;
+        /* Advance to next row */
+        current_row++;
+        if (current_row >= NUM_ROWS) current_row = 0;
+    }
+
+    /* ---- Compare match: turn OFF the row ---- */
+    if (sr & TIM_SR_CC1IF) {
+        TIM3->SR = ~TIM_SR_CC1IF;
+        GPIOA->BSRR = ALL_ROW_PINS;
     }
 }
 

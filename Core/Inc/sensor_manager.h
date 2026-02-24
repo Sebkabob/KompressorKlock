@@ -50,4 +50,31 @@ uint8_t SensorManager_GetMappedBrightness(void);
  */
 uint8_t SensorManager_GetCurrentBrightness(void);
 
+/* ================= BRIGHTNESS MODE CONTROL ================= */
+
+/**
+ * @brief Enable or disable automatic brightness from light sensor
+ * @param enabled true = auto (default), false = manual
+ */
+void SensorManager_SetAutoBrightness(bool enabled);
+
+/**
+ * @brief Check if auto brightness is active
+ * @return true if auto, false if manual
+ */
+bool SensorManager_IsAutoBrightness(void);
+
+/**
+ * @brief Set manual brightness as a percentage (1-100)
+ *        Only takes effect when auto brightness is disabled.
+ * @param percent Brightness percentage (1-100)
+ */
+void SensorManager_SetManualBrightnessPercent(uint8_t percent);
+
+/**
+ * @brief Get current manual brightness percentage
+ * @return 1-100 if manual mode was set, or last manual value
+ */
+uint8_t SensorManager_GetManualBrightnessPercent(void);
+
 #endif // SENSOR_MANAGER_H

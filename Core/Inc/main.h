@@ -75,12 +75,14 @@ void Error_Handler(void);
 #define A5_GPIO_Port GPIOA
 #define ROT_B_Pin GPIO_PIN_0
 #define ROT_B_GPIO_Port GPIOB
+#define ROT_B_EXTI_IRQn EXTI0_1_IRQn
 #define A6_Pin GPIO_PIN_8
 #define A6_GPIO_Port GPIOA
 #define A7_Pin GPIO_PIN_11
 #define A7_GPIO_Port GPIOA
 #define ROT_A_Pin GPIO_PIN_12
 #define ROT_A_GPIO_Port GPIOA
+#define ROT_A_EXTI_IRQn EXTI4_15_IRQn
 #define ROT_SW_Pin GPIO_PIN_15
 #define ROT_SW_GPIO_Port GPIOA
 #define STAT1_Pin GPIO_PIN_3

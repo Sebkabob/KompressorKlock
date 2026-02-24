@@ -34,7 +34,7 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     char date_str[32];
 
     const char *weekdays_short[] = {
-        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    	"Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
     };
 
     const char *day_suffix[] = {
@@ -72,6 +72,16 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     }
 
     Matrix_DrawTextCentered_Buf(buf, 0, str);
+}
+
+void Screen_Battery2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    const SensorData_t *data = SensorManager_GetData();
+    char str[32];
+
+    sprintf(str, "%3dmA %4dmV %2d%%", data->current_mA, data->voltage_mV, data->soc_percent);
+
+    Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
 void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -188,8 +198,8 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         };
 
         const char *weekdays[] = {
-            "Sunday", "Monday", "Tuesday", "Wednesday",
-            "Thursday", "Friday", "Saturday"
+            "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday",
+            "Thursday", "Friday"
         };
 
         const char *day_suffix[] = {

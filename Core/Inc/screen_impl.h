@@ -11,6 +11,7 @@ void Screen_Logo2(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_Battery2(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
