@@ -2,6 +2,7 @@
 #include "sensor_manager.h"
 #include "rtc_rv3032.h"
 #include "ltr_329.h"
+#include "timer_app.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
@@ -133,21 +134,7 @@ void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 }
 
 /**
- * @brief Debug screen for tuning brightness — page 0 and page 1.
- *
- * Alternates every 2 seconds between two views:
- *
- * Page 0: "R:xx F:xx M:xxx B:xxx"
- *   R = Raw single-sample light %
- *   F = Filtered (trimmed mean) light %
- *   M = Mapped brightness (from breakpoint table)
- *   B = actual Brightness (after smoothing)
- *
- * Page 1: "C0:xxxxx C1:xxxxx"
- *   C0 = Raw channel 0 (visible + IR) from sensor
- *   C1 = Raw channel 1 (IR only) from sensor
- *   These are the actual 16-bit ADC counts — use them to
- *   calibrate LTR_329_MAX_RAW_VALUE and sensor gain.
+ * @brief Debug screen for tuning brightness
  */
 void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
@@ -236,4 +223,115 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     }
 
     Matrix_ScrollText_Buf(buf, 0, message, &scroll_offset, 1, &scroll_tick);
+}
+
+/* =====================================================================
+ *  STOPWATCH SCREEN
+ *
+ *  Layout: "ICON HH:MM:SS"
+ *  Icons:  > = running, || = paused, [] = stopped
+ *
+ *  The 5x7 font custom glyphs are used for compact icons.
+ * =====================================================================*/
+
+void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[24];
+
+    uint8_t m = Stopwatch_GetMinutes();
+    uint8_t s = Stopwatch_GetSeconds();
+    uint8_t t = Stopwatch_GetTenths();
+    StopwatchState_t state = Stopwatch_GetState();
+
+    /*
+     * Format:  MM:SS.T  (under 60 min)
+     *         H:MM:SS.T (60 min and above)
+     *
+     *   Stopped:  "00:00.0"
+     *   Running:  "> 01:23.4"  or  "> 1:05:23.4"
+     *   Paused:   "|| 01:23.4" or  "|| 1:05:23.4"
+     */
+    uint16_t total_sec = Stopwatch_GetTotalSeconds();
+    uint16_t hours     = total_sec / 3600;
+    uint8_t  mins      = (total_sec / 60) % 60;
+    uint8_t  secs      = total_sec % 60;
+
+    const char *icon = "";
+    if (state == SW_STATE_RUNNING) icon = "> ";
+    else if (state == SW_STATE_PAUSED) icon = "|| ";
+
+    if (hours > 0) {
+        sprintf(str, "%s%d:%02d:%02d.%d", icon, (int)hours, mins, secs, t);
+    } else {
+        sprintf(str, "%s%02d:%02d.%d", icon, mins, secs, t);
+    }
+
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
+}
+
+/* =====================================================================
+ *  COUNTDOWN SCREEN
+ *
+ *  SETTING mode:  blinking field like time-set,  "SET HH:MM:SS"
+ *  RUNNING mode:  "> HH:MM:SS" or "> MM:SS"
+ *  PAUSED mode:   "|| HH:MM:SS"
+ *  FINISHED mode: flashing "00:00" / blank
+ * =====================================================================*/
+
+void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+
+    CountdownState_t state = Countdown_GetState();
+
+    uint8_t h = Countdown_GetHours();
+    uint8_t m = Countdown_GetMinutes();
+    uint8_t s = Countdown_GetSeconds();
+
+    if (state == CD_STATE_IDLE) {
+        Matrix_DrawTextCentered_Buf(buf, 0, "00:00:00");
+
+    } else if (state == CD_STATE_SETTING) {
+        /* Blinking field editor — show __ for active field when blink is off */
+        CountdownField_t field = Countdown_GetField();
+        bool blink_on = ((HAL_GetTick() / 500) % 2) == 0;
+
+        char h_str[4], m_str[4], s_str[4];
+
+        if (field == CD_FIELD_HOURS && !blink_on) {
+            sprintf(h_str, "__");
+        } else {
+            sprintf(h_str, "%02d", h);
+        }
+
+        if (field == CD_FIELD_MINUTES && !blink_on) {
+            sprintf(m_str, "__");
+        } else {
+            sprintf(m_str, "%02d", m);
+        }
+
+        if (field == CD_FIELD_SECONDS && !blink_on) {
+            sprintf(s_str, "__");
+        } else {
+            sprintf(s_str, "%02d", s);
+        }
+
+        sprintf(str, "%s:%s:%s", h_str, m_str, s_str);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
+
+    } else if (state == CD_STATE_FINISHED) {
+        /* Flash zeros on/off — user must press to dismiss */
+        bool flash_on = ((HAL_GetTick() / 300) % 2) == 0;
+
+        if (flash_on) {
+            Matrix_DrawTextCentered_Buf(buf, 0, "00:00:00");
+        }
+        /* off phase: buffer stays blank (already zeroed) — creates flash effect */
+
+    } else {
+        /* RUNNING or PAUSED */
+        const char *icon = (state == CD_STATE_RUNNING) ? ">" : "||";
+        sprintf(str, "%s %02d:%02d:%02d", icon, h, m, s);
+        Matrix_DrawTextCentered_Buf(buf, 0, str);
+    }
 }

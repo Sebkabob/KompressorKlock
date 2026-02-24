@@ -20,6 +20,8 @@
 #include "screens.h"
 #include "screen_impl.h"
 #include "rotary.h"
+#include "buzzer.h"
+#include "timer_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,10 +42,13 @@ extern I2C_HandleTypeDef hi2c1;
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
+TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
 static int scroll_screen_index = -1;
+static int stopwatch_screen_index = -1;
+static int countdown_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -51,6 +56,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -91,6 +97,7 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM3_Init();
   MX_I2C1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
   // Initialize display
@@ -103,18 +110,32 @@ int main(void)
   HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
 
   // Initialize all sensors
-  SensorManager_Init(&hi2c1);
+    SensorManager_Init(&hi2c1);
 
-  // Initialize screen manager and register screens
-  Screen_Init();
-//  scroll_screen_index = Screen_Register(Screen_ScrollMessage);
-  // Uncomment to enable additional screens:
-   Screen_Register(Screen_Logo);
-   Screen_Register(Screen_Time);
-   Screen_Register(Screen_TimeTempHumid);
-   Screen_Register(Screen_Battery);
-   Screen_Register(Screen_TimeDate);
-   Screen_Register(Screen_TimeTempBatt);
+    // Initialize screen manager and register screens
+    Screen_Init();                                    // ← must come first
+
+    Screen_Register(Screen_Logo);
+    Screen_Register(Screen_Time);
+    Screen_Register(Screen_TimeTempHumid);
+    Screen_Register(Screen_Battery);
+    Screen_Register(Screen_TimeDate);
+    Screen_Register(Screen_TimeTempBatt);
+
+    /* Register interactive timer screens (AFTER Screen_Init!) */
+    stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
+    countdown_screen_index = Screen_Register(Screen_Countdown);
+
+    /* Tell rotary which screens are interactive */
+    Rotary_SetStopwatchScreenIndex(stopwatch_screen_index);
+    Rotary_SetCountdownScreenIndex(countdown_screen_index);
+
+    /* Initialize buzzer (PC6) */
+    Buzzer_Init();
+
+    /* Initialize timer apps */
+    Stopwatch_Init();
+    Countdown_Init();
 
 //   Screen_Register(Screen_LightDebug);
 //   Screen_Register(Screen_Logo2);
@@ -137,6 +158,21 @@ int main(void)
 
 	    // Update all sensor readings
 	    SensorManager_Update();
+
+	    /* Update timer apps */
+	    Stopwatch_Update();
+	    Countdown_Update();
+
+	    /* Update buzzer (non-blocking beep patterns) */
+	    Buzzer_Update();
+
+	    /* Mark timer screens dirty when they need redraw */
+	    if (Screen_GetCurrent() == stopwatch_screen_index && Stopwatch_NeedsRedraw()) {
+	        Screen_MarkDirty();
+	    }
+	    if (Screen_GetCurrent() == countdown_screen_index && Countdown_NeedsRedraw()) {
+	        Screen_MarkDirty();
+	    }
 
 	    Rotary_Update();
 
@@ -247,6 +283,65 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 0;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 4294967295;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+  HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
   * @brief TIM3 Initialization Function
   * @param None
   * @retval None
@@ -319,6 +414,7 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, RCLK_Pin|SRCLK_Pin|DATA_Pin|A1_Pin

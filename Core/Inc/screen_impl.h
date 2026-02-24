@@ -19,10 +19,21 @@ void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 /**
+ * @brief Stopwatch screen — counts up from 00:00:00
+ *        Interactive: press=start/pause, scroll=reset when paused
+ *        Shows state icon: > (running), || (paused), [] (stopped)
+ */
+void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
+/**
+ * @brief Countdown timer screen — set time then count down
+ *        Interactive: scroll=set time/reset, press=start/pause/acknowledge
+ *        Flashes and beeps when finished
+ */
+void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
+/**
  * @brief Debug screen for brightness tuning
- *
- * Shows: R:xx (raw light%), F:xx (filtered%), M:xxx (mapped brightness), B:xxx (actual brightness)
- * Register this screen to see live values while tuning breakpoints.
  */
 void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 

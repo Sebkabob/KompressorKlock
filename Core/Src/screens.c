@@ -469,3 +469,13 @@ void Screen_MarkDirty(void)
 {
     sm.dirty = true;
 }
+
+void Screen_SetCurrent(int index)
+{
+    if (index >= 0 && index < sm.count) {
+        sm.current = index;
+        sm.dirty = true;
+        /* Cancel any in-progress transition */
+        sm.transitioning = false;
+    }
+}

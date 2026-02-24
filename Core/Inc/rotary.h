@@ -8,13 +8,11 @@
 
 /**
  * @brief Initialize rotary encoder with EXTI interrupts. Call once before main loop.
- *        Configures ROT_A and ROT_B as rising+falling EXTI inputs.
  */
 void Rotary_Init(void);
 
 /**
  * @brief Poll accumulated encoder steps and switch state. Call every ~5ms from main loop.
- *        Consumes steps accumulated by the EXTI ISR and drives screen transitions.
  */
 void Rotary_Update(void);
 
@@ -29,5 +27,21 @@ bool Rotary_SWPressed(void);
  *        Call this from EXTI0_1_IRQHandler and EXTI4_15_IRQHandler.
  */
 void Rotary_EXTI_Handler(void);
+
+/* ================= INTERACTIVE SCREEN REGISTRATION ================= */
+
+/**
+ * @brief Tell the rotary which screen index is the stopwatch.
+ *        When this screen is active, press/scroll go to Stopwatch_OnPress/OnScroll.
+ * @param idx Screen index returned by Screen_Register(), or -1 to disable.
+ */
+void Rotary_SetStopwatchScreenIndex(int idx);
+
+/**
+ * @brief Tell the rotary which screen index is the countdown timer.
+ *        When this screen is active, press/scroll go to Countdown_OnPress/OnScroll.
+ * @param idx Screen index returned by Screen_Register(), or -1 to disable.
+ */
+void Rotary_SetCountdownScreenIndex(int idx);
 
 #endif // ROTARY_H
