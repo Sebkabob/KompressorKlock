@@ -57,7 +57,7 @@ static uint8_t map_brightness(uint8_t light_pct)
 
 /* ================= BRIGHTNESS SMOOTHING ================= */
 #define SMOOTH_INTERVAL_MS   30
-#define SMOOTH_DIVISOR       8
+#define SMOOTH_DIVISOR       32
 
 static int16_t target_brightness = 220;
 static int16_t current_brightness_x16 = (int16_t)220 << 4;

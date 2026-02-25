@@ -3,6 +3,7 @@
 #include "screens.h"
 #include "settings.h"
 #include "timer_app.h"
+#include "calorie_app.h"
 
 static const int8_t encoder_lut[16] = {
       0,     1,    -1,     0,
@@ -21,9 +22,11 @@ static const int8_t encoder_lut[16] = {
 /* ================= INTERACTIVE SCREEN TRACKING ================= */
 static int stopwatch_screen_index = -1;
 static int countdown_screen_index = -1;
+static int calorie_screen_index   = -1;
 
 void Rotary_SetStopwatchScreenIndex(int idx) { stopwatch_screen_index = idx; }
 void Rotary_SetCountdownScreenIndex(int idx) { countdown_screen_index = idx; }
+void Rotary_SetCalorieScreenIndex(int idx)   { calorie_screen_index = idx; }
 
 static bool on_stopwatch_screen(void)
 {
@@ -35,15 +38,23 @@ static bool on_countdown_screen(void)
     return (Screen_GetCurrent() == countdown_screen_index && countdown_screen_index >= 0);
 }
 
+static bool on_calorie_screen(void)
+{
+    return (Screen_GetCurrent() == calorie_screen_index && calorie_screen_index >= 0);
+}
+
 static bool on_timer_screen(void)
 {
-    return on_stopwatch_screen() || on_countdown_screen();
+    return on_stopwatch_screen() || on_countdown_screen() || on_calorie_screen();
 }
 
 static bool scroll_claimed(void)
 {
     if (on_countdown_screen()) {
         return (Countdown_GetState() == CD_STATE_SETTING);
+    }
+    if (on_calorie_screen()) {
+        return (Calorie_GetState() == CAL_STATE_EDITING);
     }
     return false;
 }
@@ -189,13 +200,19 @@ void Rotary_Update(void)
                 }
             } else if (scroll_claimed()) {
                 while (pending_steps >= DETENT_THRESHOLD) {
-                    Countdown_OnScroll(-1);
+                    if (on_countdown_screen())
+                        Countdown_OnScroll(-1);
+                    else if (on_calorie_screen())
+                        Calorie_OnScroll(-1);
                     Screen_MarkDirty();
                     pending_steps -= DETENT_THRESHOLD;
                     last_step_tick = now;
                 }
                 while (pending_steps <= -DETENT_THRESHOLD) {
-                    Countdown_OnScroll(1);
+                    if (on_countdown_screen())
+                        Countdown_OnScroll(1);
+                    else if (on_calorie_screen())
+                        Calorie_OnScroll(1);
                     Screen_MarkDirty();
                     pending_steps += DETENT_THRESHOLD;
                     last_step_tick = now;
@@ -257,6 +274,9 @@ void Rotary_Update(void)
                         } else if (on_countdown_screen()) {
                             Countdown_OnPress();
                             Screen_MarkDirty();
+                        } else if (on_calorie_screen()) {
+                            Calorie_OnPress();
+                            Screen_MarkDirty();
                         } else {
                             sw_pressed_flag = true;
                         }
@@ -281,6 +301,9 @@ void Rotary_Update(void)
                             Countdown_OnLongPress();
                             consume_hold();
                         }
+                    } else if (on_calorie_screen()) {
+                        Calorie_OnLongPress();
+                        consume_hold();
                     }
                 }
             }
@@ -291,8 +314,9 @@ void Rotary_Update(void)
                     timer_busy = (sws == SW_STATE_RUNNING || sws == SW_STATE_PAUSED);
                 }
                 if (on_countdown_screen()) {
-                    /* Never enter settings from countdown screen —
-                       the 1s hold is for reset, that's all. */
+                    timer_busy = true;
+                }
+                if (on_calorie_screen()) {
                     timer_busy = true;
                 }
 

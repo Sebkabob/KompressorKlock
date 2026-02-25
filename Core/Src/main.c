@@ -22,6 +22,7 @@
 #include "rotary.h"
 #include "buzzer.h"
 #include "timer_app.h"
+#include "calorie_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,6 +50,7 @@ TIM_HandleTypeDef htim3;
 static int scroll_screen_index = -1;
 static int stopwatch_screen_index = -1;
 static int countdown_screen_index = -1;
+static int calorie_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -124,6 +126,9 @@ int main(void)
     Screen_Register(Screen_TimeDate);
     Screen_Register(Screen_TimeTempBatt);
 
+    calorie_screen_index = Screen_Register(Screen_Calories);
+    Rotary_SetCalorieScreenIndex(calorie_screen_index);
+
     /* Register interactive timer screens (AFTER Screen_Init!) */
     stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
     countdown_screen_index = Screen_Register(Screen_Countdown);
@@ -138,6 +143,7 @@ int main(void)
     /* Initialize timer apps */
     Stopwatch_Init();
     Countdown_Init();
+    Calorie_Init();
 
 //   Screen_Register(Screen_Logo2);
 //   Screen_Register(Screen_Battery2);
@@ -186,6 +192,15 @@ int main(void)
 	    if (Screen_GetCurrent() == scroll_screen_index) {
 	        Screen_MarkDirty();
 	    }
+
+	    if (Screen_GetCurrent() == calorie_screen_index && Calorie_NeedsRedraw()) {
+	            Screen_MarkDirty();
+	        }
+	        /* Keep calorie screen dirty while editing (for blink animation) */
+	        if (Screen_GetCurrent() == calorie_screen_index &&
+	            Calorie_GetState() == CAL_STATE_EDITING) {
+	            Screen_MarkDirty();
+	        }
 
 	    // Drive screen state machine
 	    Screen_Update();

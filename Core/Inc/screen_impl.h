@@ -33,6 +33,13 @@ void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 /**
+ * @brief Calorie tracker screen — press to enter edit mode,
+ *        scroll to adjust by +/-10, press again to lock.
+ *        Hold 1s to reset to 0.
+ */
+void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
+/**
  * @brief Debug screen for brightness tuning
  */
 void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);

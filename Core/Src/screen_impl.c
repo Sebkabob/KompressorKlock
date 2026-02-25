@@ -5,6 +5,7 @@
 #include "ltr_329.h"
 #include "timer_app.h"
 #include "main.h"
+#include "calorie_app.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -314,4 +315,23 @@ void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         sprintf(str, "%s %02d:%02d:%02d", icon, h, m, s);
         Matrix_DrawTextCentered_Buf(buf, 0, str);
     }
+}
+
+/* =====================================================================
+ *  CALORIE SCREEN
+ *
+ *  Add to the end of screen_impl.c
+ *  Also add  #include "calorie_app.h"  at the top of screen_impl.c
+ * =====================================================================*/
+void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+    uint16_t count = Calorie_GetCount();
+
+    if (Calorie_IsFlashing()) {
+        return;
+    }
+
+    sprintf(str, "CAL %d/1600", count);
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
 }

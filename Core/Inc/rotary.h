@@ -15,6 +15,7 @@ void Rotary_EXTI_Handler(void);
 
 void Rotary_SetStopwatchScreenIndex(int idx);
 void Rotary_SetCountdownScreenIndex(int idx);
+void Rotary_SetCalorieScreenIndex(int idx);
 
 /* ================= PRESS INDICATOR BAR ================= */
 
@@ -22,7 +23,7 @@ void Rotary_SetCountdownScreenIndex(int idx);
  * @brief Get how many pixels (0-7) the hold bar should show.
  *        0 = nothing, 1-7 = bar height from bottom.
  *        Fills over the hold duration relevant to the current context:
- *          - On stopwatch/countdown screens: 1 second (timer reset hold)
+ *          - On stopwatch/countdown/calorie screens: 1 second (timer reset hold)
  *          - Elsewhere: 2 seconds (settings entry hold)
  *        Only shown during holds, not on short presses.
  */
