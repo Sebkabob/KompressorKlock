@@ -115,6 +115,8 @@ int main(void)
     // Initialize screen manager and register screens
     Screen_Init();                                    // ← must come first
 
+//    Screen_Register(Screen_LightDebug);
+
     Screen_Register(Screen_Logo);
     Screen_Register(Screen_Time);
     Screen_Register(Screen_TimeTempHumid);
@@ -137,7 +139,6 @@ int main(void)
     Stopwatch_Init();
     Countdown_Init();
 
-//   Screen_Register(Screen_LightDebug);
 //   Screen_Register(Screen_Logo2);
 //   Screen_Register(Screen_Battery2);
 //   Screen_Register(Screen_TimeLight);

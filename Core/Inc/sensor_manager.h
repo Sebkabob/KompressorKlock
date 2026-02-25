@@ -15,6 +15,7 @@ typedef struct {
 
     // Environment
     int temp_f;
+    int temp_c;
     int humidity;
     int light_percent;
 
@@ -38,43 +39,14 @@ bool SensorManager_HasChanged(void);
 
 /* ================= DEBUG ACCESSORS ================= */
 
-/**
- * @brief Get the brightness value from breakpoint mapping (before smoothing)
- * @return Target brightness (0-255)
- */
 uint8_t SensorManager_GetMappedBrightness(void);
-
-/**
- * @brief Get the actual current brightness (after smoothing)
- * @return Current brightness (0-255)
- */
 uint8_t SensorManager_GetCurrentBrightness(void);
 
 /* ================= BRIGHTNESS MODE CONTROL ================= */
 
-/**
- * @brief Enable or disable automatic brightness from light sensor
- * @param enabled true = auto (default), false = manual
- */
 void SensorManager_SetAutoBrightness(bool enabled);
-
-/**
- * @brief Check if auto brightness is active
- * @return true if auto, false if manual
- */
 bool SensorManager_IsAutoBrightness(void);
-
-/**
- * @brief Set manual brightness as a percentage (1-100)
- *        Only takes effect when auto brightness is disabled.
- * @param percent Brightness percentage (1-100)
- */
 void SensorManager_SetManualBrightnessPercent(uint8_t percent);
-
-/**
- * @brief Get current manual brightness percentage
- * @return 1-100 if manual mode was set, or last manual value
- */
 uint8_t SensorManager_GetManualBrightnessPercent(void);
 
 #endif // SENSOR_MANAGER_H

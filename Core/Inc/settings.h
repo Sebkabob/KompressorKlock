@@ -17,6 +17,9 @@ typedef enum {
     SETTING_TIME_SET = 0,
     SETTING_DATE_SET,
     SETTING_BRIGHTNESS,
+    SETTING_12_24HR,
+    SETTING_TEMP_UNIT,
+    SETTING_EXIT,
     SETTING_COUNT
 } SettingID_t;
 
@@ -37,5 +40,29 @@ bool Settings_NeedsRedraw(void);
  * @return true if editing and on the OK field, false otherwise
  */
 bool Settings_IsOnOK(void);
+
+/* ================= GLOBAL DISPLAY PREFERENCES ================= */
+
+/**
+ * @brief Check if display is in 24-hour mode
+ * @return true if 24-hour, false if 12-hour
+ */
+bool Settings_Is24Hour(void);
+
+/**
+ * @brief Set 12/24 hour mode
+ */
+void Settings_Set24Hour(bool enabled);
+
+/**
+ * @brief Check if temperature should be displayed in Celsius
+ * @return true if Celsius, false if Fahrenheit
+ */
+bool Settings_IsCelsius(void);
+
+/**
+ * @brief Set temperature unit
+ */
+void Settings_SetCelsius(bool enabled);
 
 #endif // SETTINGS_H

@@ -291,9 +291,9 @@ void Rotary_Update(void)
                     timer_busy = (sws == SW_STATE_RUNNING || sws == SW_STATE_PAUSED);
                 }
                 if (on_countdown_screen()) {
-                    CountdownState_t cds = Countdown_GetState();
-                    timer_busy = (cds == CD_STATE_SETTING || cds == CD_STATE_RUNNING ||
-                                  cds == CD_STATE_PAUSED || cds == CD_STATE_FINISHED);
+                    /* Never enter settings from countdown screen —
+                       the 1s hold is for reset, that's all. */
+                    timer_busy = true;
                 }
 
                 if (!timer_busy) {

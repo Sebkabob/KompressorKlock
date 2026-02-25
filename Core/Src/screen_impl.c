@@ -1,11 +1,29 @@
 #include "screen_impl.h"
 #include "sensor_manager.h"
+#include "settings.h"
 #include "rtc_rv3032.h"
 #include "ltr_329.h"
 #include "timer_app.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
+
+/* ================= HELPER: get display hour ================= */
+static uint8_t get_display_hour(const SensorData_t *data)
+{
+    return Settings_Is24Hour() ? data->hours_24 : data->hours_12;
+}
+
+/* ================= HELPER: get display temp ================= */
+static int get_display_temp(const SensorData_t *data)
+{
+    return Settings_IsCelsius() ? data->temp_c : data->temp_f;
+}
+
+static char get_temp_unit_char(void)
+{
+    return Settings_IsCelsius() ? 'C' : 'F';
+}
 
 /* ================= SCREEN IMPLEMENTATIONS ================= */
 
@@ -23,7 +41,7 @@ void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
     char str[32];
-    sprintf(str, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
+    sprintf(str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
@@ -43,8 +61,12 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         "th", "st"
     };
 
-    char am_pm = (data->hours_24 < 12) ? 'a' : 'p';
-    sprintf(time_str, "%02d:%02d%c", data->hours_12, data->minutes, am_pm);
+    if (Settings_Is24Hour()) {
+        sprintf(time_str, "%02d:%02d", data->hours_24, data->minutes);
+    } else {
+        char am_pm = (data->hours_24 < 12) ? 'a' : 'p';
+        sprintf(time_str, "%02d:%02d%c", data->hours_12, data->minutes, am_pm);
+    }
 
     uint8_t weekday = RV3032_GetWeekday();
     uint8_t date = RV3032_GetDate();
@@ -83,7 +105,7 @@ void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
     char str[32];
-    sprintf(str, "  %2dF   %2d\x01%%", data->temp_f, data->humidity);
+    sprintf(str, "  %2d%c   %2d\x01%%", get_display_temp(data), get_temp_unit_char(), data->humidity);
     Matrix_DrawText_Buf(buf, 0, 0, str);
 }
 
@@ -92,10 +114,10 @@ void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     const SensorData_t *data = SensorManager_GetData();
     char str1[32], str2[32];
 
-    sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
+    sprintf(str1, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str1);
 
-    sprintf(str2, "%2d\x03 %2d\x01", data->temp_f, data->humidity);
+    sprintf(str2, "%2d\x03 %2d\x01", get_display_temp(data), data->humidity);
     Matrix_DrawTextRight_Buf(buf, 0, str2);
 }
 
@@ -104,7 +126,7 @@ void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     const SensorData_t *data = SensorManager_GetData();
     char str1[32], str2[32];
 
-    sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
+    sprintf(str1, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str1);
 
     sprintf(str2, "%2d%%", data->light_percent);
@@ -116,10 +138,10 @@ void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     const SensorData_t *data = SensorManager_GetData();
     char str1[32], str2[32];
 
-    sprintf(str1, "%02d:%02d:%02d", data->hours_12, data->minutes, data->seconds);
+    sprintf(str1, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
     Matrix_DrawText_Buf(buf, 0, 0, str1);
 
-    sprintf(str2, "%2d\x03 %2d%%", data->temp_f, data->soc_percent);
+    sprintf(str2, "%2d\x03 %2d%%", get_display_temp(data), data->soc_percent);
     Matrix_DrawTextRight_Buf(buf, 0, str2);
 }
 
@@ -183,15 +205,18 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         else if (data->hours_24 < 18) greeting = "afternoon";
         else greeting = "evening";
 
+        int temp = get_display_temp(data);
+        char unit = get_temp_unit_char();
+
         sprintf(message,
             "Today is %s, %s %d%s, %d. It is a lovely %s. "
-            "The time is %02d:%02d:%02d. Battery: %d%% Temp: %dF. Have a great day!",
+            "The time is %02d:%02d:%02d. Battery: %d%% Temp: %d%c. Have a great day!",
             weekdays[RV3032_GetWeekday()],
             months[RV3032_GetMonth() - 1],
             RV3032_GetDate(), day_suffix[RV3032_GetDate()],
             RV3032_GetYear(), greeting,
-            data->hours_12, data->minutes, data->seconds,
-            data->soc_percent, data->temp_f
+            get_display_hour(data), data->minutes, data->seconds,
+            data->soc_percent, temp, unit
         );
         last_update = now;
     }
@@ -201,11 +226,6 @@ void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 /* =====================================================================
  *  STOPWATCH SCREEN
- *
- *  Format (always centered):
- *    Stopped:  "00.00"
- *    Running:  "> 05.23"   or  "> 1:05.23"   or  "> 1:00:05.23"
- *    Paused:   "|| 05.23"  or  "|| 1:05.23"  or  "|| 1:00:05.23"
  * =====================================================================*/
 
 void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -221,10 +241,6 @@ void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     uint8_t  mins  = (uint8_t)((total_secs / 60) % 60);
     uint16_t hours = (uint16_t)(total_secs / 3600);
 
-    /*
-     * Build the time portion first, then prepend the icon.
-     * This way the centering accounts for the icon width.
-     */
     char time_part[24];
     if (hours > 0) {
         sprintf(time_part, "%d:%02d:%02d.%02d", (int)hours, mins, secs, cs);
@@ -237,9 +253,8 @@ void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     if (state == SW_STATE_RUNNING) {
         sprintf(str, "> %s", time_part);
     } else if (state == SW_STATE_PAUSED) {
-        sprintf(str, "|| %s", time_part);
+        sprintf(str, " \x04 %s", time_part);
     } else {
-        /* STOPPED — just show the time, no icon */
         sprintf(str, "%s", time_part);
     }
 
@@ -248,12 +263,6 @@ void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 /* =====================================================================
  *  COUNTDOWN SCREEN
- *
- *  IDLE:      shows last set time as "HH:MM:SS" (static)
- *  SETTING:   blinking field with __ placeholder
- *  RUNNING:   "> HH:MM:SS"
- *  PAUSED:    "|| HH:MM:SS"
- *  FINISHED:  flashing "00:00:00" / blank (alarm active)
  * =====================================================================*/
 
 void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -301,8 +310,7 @@ void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
 
     } else {
-        /* RUNNING or PAUSED */
-        const char *icon = (state == CD_STATE_RUNNING) ? ">" : "||";
+        const char *icon = (state == CD_STATE_RUNNING) ? ">" : "\x04";
         sprintf(str, "%s %02d:%02d:%02d", icon, h, m, s);
         Matrix_DrawTextCentered_Buf(buf, 0, str);
     }
