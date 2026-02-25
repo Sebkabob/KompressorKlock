@@ -224,7 +224,7 @@ bool RV3032_SetTime(uint8_t sec, uint8_t min, uint8_t hour,
     _time[TIME_MINUTES] = RV3032_DECtoBCD(min);
     _time[TIME_HOURS] = RV3032_DECtoBCD(hour);
     _time[TIME_DATE] = RV3032_DECtoBCD(date);
-    _time[TIME_WEEKDAY] = 1 << weekday;  /* Weekday is bit-encoded */
+    _time[TIME_WEEKDAY] = weekday;  /* Weekday is bit-encoded */
     _time[TIME_MONTH] = RV3032_DECtoBCD(month);
     _time[TIME_YEAR] = RV3032_DECtoBCD(year - 2000);
 
@@ -307,7 +307,7 @@ bool RV3032_SetWeekday(uint8_t value)
     {
         value = 6;
     }
-    _time[TIME_WEEKDAY] = 1 << value;
+    _time[TIME_WEEKDAY] = value;
     return RV3032_SetTimeArray(_time, TIME_ARRAY_LENGTH);
 }
 
@@ -392,17 +392,7 @@ uint8_t RV3032_GetDate(void)
 
 uint8_t RV3032_GetWeekday(void)
 {
-    uint8_t tempWeekday = _time[TIME_WEEKDAY];
-
-    /* Convert from bit-encoded to 0-6 value */
-    uint8_t day = 0;
-    while (tempWeekday > 1)
-    {
-        tempWeekday >>= 1;
-        day++;
-    }
-
-    return day;
+	return _time[TIME_WEEKDAY] & 0x07;
 }
 
 uint8_t RV3032_GetMonth(void)
