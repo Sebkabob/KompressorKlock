@@ -1,5 +1,6 @@
 #include "matrix.h"
 #include <string.h>
+#include <stdbool.h>
 
 /* ================= FRAMEBUFFER ================= */
 static uint8_t display_buffer[NUM_ROWS][TOTAL_BYTES];
@@ -38,6 +39,10 @@ static volatile uint8_t current_row = 0;
 
 static volatile uint16_t brightness_ccr = TIMER_ARR; /* current CCR1 value */
 static volatile uint8_t  brightness_off = 0;          /* 1 = display off   */
+
+static volatile uint16_t pending_ccr = TIMER_ARR;
+static volatile uint8_t  pending_off = 0;
+static volatile bool     ccr_pending = false;
 
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
@@ -304,14 +309,13 @@ static const uint16_t brightness_lut[256] = {
 void Matrix_SetBrightness(uint8_t brightness)
 {
     if (brightness == 0) {
-        brightness_off = 1;
-        brightness_ccr = 0;
-        TIM3->CCR1 = 0;
+        pending_off = 1;
+        pending_ccr = 0;
     } else {
-        brightness_off = 0;
-        brightness_ccr = brightness_lut[brightness];
-        TIM3->CCR1 = brightness_ccr;
+        pending_off = 0;
+        pending_ccr = brightness_lut[brightness];
     }
+    ccr_pending = true;
 }
 
 uint8_t Matrix_GetBrightness(void)
@@ -466,6 +470,14 @@ void Matrix_TIM3_IRQHandler(void)
 
         /* Blank all rows immediately */
         GPIOA->BSRR = ALL_ROW_PINS;
+
+        /* Apply pending brightness change while all rows are OFF */
+        if (ccr_pending) {
+            brightness_off = pending_off;
+            brightness_ccr = pending_ccr;
+            TIM3->CCR1 = pending_ccr;
+            ccr_pending = false;
+        }
 
         /* Shift out data for current row */
         ShiftOutRow(display_buffer[current_row]);
