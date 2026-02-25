@@ -328,10 +328,11 @@ void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     char str[32];
     uint16_t count = Calorie_GetCount();
 
-    if (Calorie_IsFlashing()) {
-        return;
+    if (Calorie_GetState() == CAL_STATE_EDITING) {
+        sprintf(str, "SET CAL %d", count);
+    } else {
+        sprintf(str, "CAL %d/1600", count);
     }
 
-    sprintf(str, "CAL %d/1600", count);
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }

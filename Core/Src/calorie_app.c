@@ -27,8 +27,6 @@ void Calorie_OnPress(void)
         cal_state = CAL_STATE_DISPLAY;
         Buzzer_BeepDouble();
     }
-    cal_flash_start = HAL_GetTick();
-    cal_dirty = true;
 }
 
 void Calorie_OnScroll(int direction)
