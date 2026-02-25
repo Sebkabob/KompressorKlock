@@ -269,15 +269,24 @@ void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
-
     CountdownState_t state = Countdown_GetState();
 
     uint8_t h = Countdown_GetHours();
     uint8_t m = Countdown_GetMinutes();
     uint8_t s = Countdown_GetSeconds();
 
+    /* Build compact time string (no leading zero groups) */
+    char time_part[16];
+    if (h > 0) {
+        sprintf(time_part, "%d:%02d:%02d", h, m, s);
+    } else if (m > 0) {
+        sprintf(time_part, "%d:%02d", m, s);
+    } else {
+        sprintf(time_part, "0:%02d", s);
+    }
+
     if (state == CD_STATE_IDLE) {
-        sprintf(str, "%02d:%02d:%02d", h, m, s);
+        sprintf(str, "%s", time_part);
         Matrix_DrawTextCentered_Buf(buf, 0, str);
 
     } else if (state == CD_STATE_SETTING) {
@@ -307,21 +316,19 @@ void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     } else if (state == CD_STATE_FINISHED) {
         bool flash_on = ((HAL_GetTick() / 300) % 2) == 0;
         if (flash_on) {
-            Matrix_DrawTextCentered_Buf(buf, 0, "00:00:00");
+            Matrix_DrawTextCentered_Buf(buf, 0, "0:00");
         }
 
     } else {
+        /* RUNNING or PAUSED */
         const char *icon = (state == CD_STATE_RUNNING) ? ">" : "\x04";
-        sprintf(str, "%s %02d:%02d:%02d", icon, h, m, s);
+        sprintf(str, "%s %s", icon, time_part);
         Matrix_DrawTextCentered_Buf(buf, 0, str);
     }
 }
 
 /* =====================================================================
  *  CALORIE SCREEN
- *
- *  Add to the end of screen_impl.c
- *  Also add  #include "calorie_app.h"  at the top of screen_impl.c
  * =====================================================================*/
 void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {

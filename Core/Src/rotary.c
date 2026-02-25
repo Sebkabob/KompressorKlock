@@ -295,12 +295,8 @@ void Rotary_Update(void)
                         Stopwatch_OnLongPress();
                         consume_hold();
                     } else if (on_countdown_screen()) {
-                        CountdownState_t cds = Countdown_GetState();
-                        if (cds == CD_STATE_SETTING || cds == CD_STATE_PAUSED ||
-                            cds == CD_STATE_RUNNING) {
-                            Countdown_OnLongPress();
-                            consume_hold();
-                        }
+                        Countdown_OnLongPress();
+                        consume_hold();
                     } else if (on_calorie_screen()) {
                         Calorie_OnLongPress();
                         consume_hold();
@@ -314,7 +310,9 @@ void Rotary_Update(void)
                     timer_busy = (sws == SW_STATE_RUNNING || sws == SW_STATE_PAUSED);
                 }
                 if (on_countdown_screen()) {
-                    timer_busy = true;
+                    CountdownState_t cds = Countdown_GetState();
+                    timer_busy = (cds == CD_STATE_RUNNING || cds == CD_STATE_PAUSED ||
+                                  cds == CD_STATE_SETTING);
                 }
                 if (on_calorie_screen()) {
                     timer_busy = true;
