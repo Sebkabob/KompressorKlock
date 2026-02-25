@@ -29,8 +29,8 @@ static uint8_t manual_brightness_percent = 50;
 static const BrightnessBreakpoint_t brightness_map[NUM_BREAKPOINTS] = {
     {    0,         1  },
     {   6,         70  },
-    {   14,        95  },
-    {   35,       150  },
+    {   12,       130  },
+    {   20,       255  },
     {  100,       255  },
 };
 

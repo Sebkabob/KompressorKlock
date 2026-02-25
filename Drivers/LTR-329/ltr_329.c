@@ -13,7 +13,7 @@ static uint8_t current_gain = LTR_329_GAIN_1X;
  * we sort the buffer and take the mean of the middle 50% (trimmed mean).
  * This rejects outlier readings from sensor noise or IR spikes.
  */
-#define AVG_SAMPLES 40  /* 25 samples at 100ms = 2.5 seconds */
+#define AVG_SAMPLES 100  /* 25 samples at 100ms = 2.5 seconds */
 #define TRIM_COUNT   6  /* Discard this many from top AND bottom (24% each side) */
 
 static uint8_t light_buffer[AVG_SAMPLES];
