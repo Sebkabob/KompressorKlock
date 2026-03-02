@@ -119,15 +119,15 @@ int main(void)
 
 //    Screen_Register(Screen_LightDebug);
 
-    Screen_Register(Screen_Logo);
+//    Screen_Register(Screen_Logo);
     Screen_Register(Screen_Time);
     Screen_Register(Screen_TimeTempHumid);
     Screen_Register(Screen_Battery);
     Screen_Register(Screen_TimeDate);
     Screen_Register(Screen_TimeTempBatt);
 
-    calorie_screen_index = Screen_Register(Screen_Calories);
-    Rotary_SetCalorieScreenIndex(calorie_screen_index);
+//    calorie_screen_index = Screen_Register(Screen_Calories);
+//    Rotary_SetCalorieScreenIndex(calorie_screen_index);
 
     /* Register interactive timer screens (AFTER Screen_Init!) */
     stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
@@ -143,7 +143,7 @@ int main(void)
     /* Initialize timer apps */
     Stopwatch_Init();
     Countdown_Init();
-    Calorie_Init();
+//    Calorie_Init();
 
 //   Screen_Register(Screen_Logo2);
 //   Screen_Register(Screen_Battery2);
