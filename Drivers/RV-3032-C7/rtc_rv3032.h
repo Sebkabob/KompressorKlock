@@ -160,6 +160,26 @@ typedef struct {
     uint16_t year;
 } RV3032_Time_t;
 
+/* EEPROM PMU Register */
+#define RV3032_EEPROM_PMU              0xC0
+
+/* EEPROM Memory Control Registers */
+#define RV3032_EE_ADDR                 0x3D
+#define RV3032_EE_DATA                 0x3E
+#define RV3032_EE_CMD                  0x3F
+
+/* EEPROM Commands */
+#define RV3032_EECMD_UPDATE_ALL        0x11  /* RAM mirror → EEPROM */
+#define RV3032_EECMD_REFRESH_ALL       0x12  /* EEPROM → RAM mirror */
+
+/* BSM field values (bits 5:4 of EEPROM PMU) */
+#define RV3032_BSM_DISABLED            0x00
+#define RV3032_BSM_DSM                 0x01  /* Direct Switching Mode */
+#define RV3032_BSM_LSM                 0x02  /* Level Switching Mode  */
+
+/* Backup Switchover Configuration */
+bool RV3032_EnableBackupSwitchover(void);
+
 /* ==================== FUNCTION PROTOTYPES ==================== */
 
 /* Initialization */
