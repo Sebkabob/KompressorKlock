@@ -568,3 +568,38 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
     int x = NUM_COLS - offset;
     Matrix_DrawText_Buf(buf, row, x, text);
 }
+
+int Matrix_TextPixelWidth(const char *text)
+{
+    return text_pixel_width(text);
+}
+
+void Matrix_DrawBatteryIcon_Blink_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES],
+                                       int col, uint8_t soc, uint8_t blink_bar)
+{
+    uint8_t filled_bars = 0;
+    if (soc >= 5) {
+        filled_bars = (uint8_t)((soc - 5) / 10) + 1;
+        if (filled_bars > 10) filled_bars = 10;
+    }
+
+    for (int i = 0; i < 15; i++) {
+        uint8_t col_data = battery_shell[i];
+
+        if (i >= 2 && i <= 11) {
+            uint8_t bar_index = (uint8_t)(i - 2);
+            if (bar_index < filled_bars || bar_index == blink_bar) {
+                col_data |= 0x1C;
+            }
+        }
+
+        int dst_col = col + i;
+        if (dst_col < 0 || dst_col >= NUM_COLS) continue;
+
+        for (int r = 0; r < NUM_ROWS; r++) {
+            if (col_data & (1 << r)) {
+                set_pixel_buf(buf, r, dst_col, 1);
+            }
+        }
+    }
+}

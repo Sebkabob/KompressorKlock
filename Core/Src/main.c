@@ -53,6 +53,7 @@ static int scroll_screen_index = -1;
 static int stopwatch_screen_index = -1;
 static int countdown_screen_index = -1;
 static int calorie_screen_index = -1;
+static int battery_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,7 +79,36 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	  /* Force row pins HIGH (off) immediately — before HAL_Init or GPIO config.
+	   * This prevents the LED matrix from showing stale shift register data
+	   * during the brief window where MX_GPIO_Init configures pin modes.
+	   *
+	   * On STM32G0, GPIO pins default to analog mode after reset, so we must:
+	   *   1. Enable GPIOA clock
+	   *   2. Set MODER to output for A1-A7
+	   *   3. Set ODR high for those pins
+	   * All done via registers to be as fast as possible.
+	   */
+	  RCC->IOPENR |= RCC_IOPENR_GPIOAEN;
+	  (void)RCC->IOPENR; /* read-back to ensure clock is ready */
 
+	  /* Set A1(PA3), A2(PA4), A3(PA5), A4(PA6), A5(PA7), A6(PA8), A7(PA11) as outputs */
+	  /* MODER: 01 = output. Clear field then set. */
+	  GPIOA->MODER = (GPIOA->MODER
+	    & ~(GPIO_MODER_MODE3_Msk | GPIO_MODER_MODE4_Msk | GPIO_MODER_MODE5_Msk
+	      | GPIO_MODER_MODE6_Msk | GPIO_MODER_MODE7_Msk | GPIO_MODER_MODE8_Msk
+	      | GPIO_MODER_MODE11_Msk))
+	    | (0x01 << GPIO_MODER_MODE3_Pos)
+	    | (0x01 << GPIO_MODER_MODE4_Pos)
+	    | (0x01 << GPIO_MODER_MODE5_Pos)
+	    | (0x01 << GPIO_MODER_MODE6_Pos)
+	    | (0x01 << GPIO_MODER_MODE7_Pos)
+	    | (0x01 << GPIO_MODER_MODE8_Pos)
+	    | (0x01 << GPIO_MODER_MODE11_Pos);
+
+	  /* Drive all row pins HIGH (rows are active-low) */
+	  GPIOA->BSRR = A1_Pin | A2_Pin | A3_Pin | A4_Pin
+	               | A5_Pin | A6_Pin | A7_Pin;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -104,6 +134,26 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   Matrix_Init();
+
+  /* Shift out 84 zeros to blank the shift registers before
+     TIM3 starts scanning rows. This clears any stale data
+     from the previous power cycle that causes glitches. */
+  {
+      /* Ensure all rows OFF */
+      GPIOA->BSRR = A1_Pin | A2_Pin | A3_Pin | A4_Pin
+                   | A5_Pin | A6_Pin | A7_Pin;
+
+      /* Clock 84 zero-bits into the shift register chain */
+      GPIOA->BRR = DATA_Pin;  /* DATA low */
+      for (int i = 0; i < 84; i++) {
+          GPIOA->BSRR = SRCLK_Pin;
+          GPIOA->BRR  = SRCLK_Pin;
+      }
+      /* Latch */
+      GPIOA->BSRR = RCLK_Pin;
+      GPIOA->BRR  = RCLK_Pin;
+  }
+
   Rotary_Init();
   HAL_TIM_Base_Start_IT(&htim3);
   HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
@@ -156,10 +206,10 @@ int main(void)
   Screen_Init();
 
   Screen_Register(Screen_Time);
-  Screen_Register(Screen_TimeTempHumid);
-  Screen_Register(Screen_Battery);
   Screen_Register(Screen_TimeDate);
-  Screen_Register(Screen_TimeTempBatt);
+  Screen_Register(Screen_TimeTempHumid);
+  battery_screen_index = Screen_Register(Screen_Battery);
+//  Screen_Register(Screen_TimeTempBatt);
 
   stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
   countdown_screen_index = Screen_Register(Screen_Countdown);
@@ -241,11 +291,33 @@ int main(void)
 
 	    if (Screen_GetCurrent() == calorie_screen_index && Calorie_NeedsRedraw()) {
 	            Screen_MarkDirty();
+	    }
+
+	    /* Keep calorie screen dirty while editing (for blink animation) */
+	    if (Screen_GetCurrent() == calorie_screen_index &&
+	    		Calorie_GetState() == CAL_STATE_EDITING) {
+	    	Screen_MarkDirty();
+	    }
+
+	    if (battery_screen_index >= 0 && Screen_GetCurrent() == battery_screen_index) {
+	            const SensorData_t *batt_data = SensorManager_GetData();
+	            if (batt_data->current_mA >= 0) {
+	                Screen_MarkDirty();
+	            }
 	        }
-	        /* Keep calorie screen dirty while editing (for blink animation) */
-	        if (Screen_GetCurrent() == calorie_screen_index &&
-	            Calorie_GetState() == CAL_STATE_EDITING) {
-	            Screen_MarkDirty();
+
+	    /* Auto-switch to battery screen when charger is plugged in */
+	        {
+	            static bool was_charging = false;
+	            bool charging_now = (SensorManager_GetData()->current_mA >= 0);
+
+	            if (charging_now && !was_charging && battery_screen_index >= 0) {
+	                if (!Screen_IsTransitioning() &&
+	                    Settings_GetState() == SETTINGS_STATE_INACTIVE) {
+	                    Screen_GoTo(battery_screen_index, TRANSITION_DISSOLVE);
+	                }
+	            }
+	            was_charging = charging_now;
 	        }
 
 	    // Drive screen state machine

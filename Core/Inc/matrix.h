@@ -46,4 +46,9 @@ void Matrix_TIM3_IRQHandler(void);
 
 void Matrix_DrawBatteryIcon_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int col, uint8_t soc);
 
+int Matrix_TextPixelWidth(const char *text);
+
+void Matrix_DrawBatteryIcon_Blink_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES],
+                                       int col, uint8_t soc, uint8_t blink_bar);
+
 #endif

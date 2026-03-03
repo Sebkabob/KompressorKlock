@@ -81,24 +81,45 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
 
-    /* Draw battery icon at column 0 */
-    Matrix_DrawBatteryIcon_Buf(buf, 0, (uint8_t)data->soc_percent);
+    #define ICON_W   15
+    #define ICON_GAP  2
 
-    if (data->current_mA >= 0) {
-        /* Charging: show lightning bolt centered in remaining space */
-        /* Icon is 15 cols wide, remaining area is cols 15-83 */
-        /* Bolt char \x02 is ~5px wide, center of 69px remaining = col ~47 */
-        char str[4];
-        str[0] = '\x02';
-        str[1] = '\0';
-        int center = 15 + (NUM_COLS - 15) / 2 - 2;
-        Matrix_DrawText_Buf(buf, 0, center, str);
+    uint8_t soc = (uint8_t)data->soc_percent;
+    bool charging = (data->current_mA >= 0);
+
+    /* Calculate filled bars (same logic as DrawBatteryIcon) */
+    uint8_t filled_bars = 0;
+    if (soc >= 5) {
+        filled_bars = (uint8_t)((soc - 5) / 10) + 1;
+        if (filled_bars > 10) filled_bars = 10;
+    }
+
+    /* While charging, blink the next unfilled bar */
+    uint8_t blink_bar = 0xFF;  /* 0xFF = no blink */
+    if (charging && filled_bars < 10) {
+        bool blink_on = ((HAL_GetTick() / 500) % 2) == 0;
+        if (blink_on) {
+            blink_bar = filled_bars;  /* 0-indexed, the next bar */
+        }
+    }
+
+    if (charging) {
+        char str[4] = { '\x02', '\0' };
+        int total_w = ICON_W + ICON_GAP + Matrix_TextPixelWidth(str);
+        int start = (NUM_COLS - total_w) / 2;
+
+        Matrix_DrawBatteryIcon_Blink_Buf(buf, start, soc, blink_bar);
+        Matrix_DrawText_Buf(buf, 0, start + ICON_W + ICON_GAP, str);
     } else {
-        /* Discharging: show days remaining */
         char str[16];
-        int days = (data->soc_percent * 12 + 50) / 100;  /* 0.12 * soc, rounded */
+        int days = (soc * 12 + 50) / 100;
         sprintf(str, "%dd left", days);
-        Matrix_DrawText_Buf(buf, 0, 17, str);
+
+        int total_w = ICON_W + ICON_GAP + Matrix_TextPixelWidth(str);
+        int start = (NUM_COLS - total_w) / 2;
+
+        Matrix_DrawBatteryIcon_Buf(buf, start, soc);
+        Matrix_DrawText_Buf(buf, 0, start + ICON_W + ICON_GAP, str);
     }
 }
 
