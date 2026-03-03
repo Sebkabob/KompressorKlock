@@ -44,4 +44,6 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
 
 void Matrix_TIM3_IRQHandler(void);
 
+void Matrix_DrawBatteryIcon_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int col, uint8_t soc);
+
 #endif

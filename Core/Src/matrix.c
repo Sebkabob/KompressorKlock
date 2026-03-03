@@ -501,6 +501,55 @@ void Matrix_TIM3_IRQHandler(void)
     }
 }
 
+/* ================= BATTERY ICON ================= */
+/*
+ * 15-column sprite. Each byte = 1 column, bit 0 = row 0 (top).
+ *
+ *   Col  0:     0x00  spacer
+ *   Col  1:     0x3E  left wall  (rows 1-5)
+ *   Col  2-11:  0x22  top/bottom border (rows 1,5) — fillable
+ *   Col 12:     0x3E  right wall (rows 1-5)
+ *   Col 13:     0x1C  nub (rows 2-4)
+ *   Col 14:     0x00  spacer
+ *
+ * Filling a bar = OR 0x1C (rows 2-4) onto columns 2-11.
+ */
+static const uint8_t battery_shell[15] = {
+    0x00, 0x3E, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
+    0x22, 0x22, 0x22, 0x22, 0x3E, 0x1C, 0x00
+};
+
+void Matrix_DrawBatteryIcon_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int col, uint8_t soc)
+{
+    /* 10 bars, thresholds: 5,15,25,35,45,55,65,75,85,95 */
+    uint8_t filled_bars = 0;
+    if (soc >= 5) {
+        filled_bars = (uint8_t)((soc - 5) / 10) + 1;
+        if (filled_bars > 10) filled_bars = 10;
+    }
+
+    for (int i = 0; i < 15; i++) {
+        uint8_t col_data = battery_shell[i];
+
+        /* Fill interior columns 2-11 */
+        if (i >= 2 && i <= 11) {
+            uint8_t bar_index = (uint8_t)(i - 2);
+            if (bar_index < filled_bars) {
+                col_data |= 0x1C;  /* rows 2,3,4 */
+            }
+        }
+
+        int dst_col = col + i;
+        if (dst_col < 0 || dst_col >= NUM_COLS) continue;
+
+        for (int r = 0; r < NUM_ROWS; r++) {
+            if (col_data & (1 << r)) {
+                set_pixel_buf(buf, r, dst_col, 1);
+            }
+        }
+    }
+}
+
 void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
                            const char *text, int *scroll_offset,
                            uint32_t speed_ms, uint32_t *last_scroll_tick)

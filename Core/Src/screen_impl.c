@@ -80,18 +80,26 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
-    char str[32];
 
-    if (data->charger_fault_latchoff) {
-        sprintf(str, "CHG FAULT!");
-    } else if (data->charger_fault_recoverable) {
-        sprintf(str, "CHG WARN!");
-    } else if (data->current_mA >= 0) {
-        sprintf(str, "%2d%% %3dmA \x02", data->soc_percent, data->current_mA);
+    /* Draw battery icon at column 0 */
+    Matrix_DrawBatteryIcon_Buf(buf, 0, (uint8_t)data->soc_percent);
+
+    if (data->current_mA >= 0) {
+        /* Charging: show lightning bolt centered in remaining space */
+        /* Icon is 15 cols wide, remaining area is cols 15-83 */
+        /* Bolt char \x02 is ~5px wide, center of 69px remaining = col ~47 */
+        char str[4];
+        str[0] = '\x02';
+        str[1] = '\0';
+        int center = 15 + (NUM_COLS - 15) / 2 - 2;
+        Matrix_DrawText_Buf(buf, 0, center, str);
     } else {
-        sprintf(str, "%2d%% %3dmA", data->soc_percent, data->current_mA);
+        /* Discharging: show days remaining */
+        char str[16];
+        int days = (data->soc_percent * 12 + 50) / 100;  /* 0.12 * soc, rounded */
+        sprintf(str, "%dd left", days);
+        Matrix_DrawText_Buf(buf, 0, 17, str);
     }
-    Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
 void Screen_Battery2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
