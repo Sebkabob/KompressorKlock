@@ -65,61 +65,7 @@ static void MX_TIM2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* Call this early in main(), after I2C init, with VBACKUP disconnected */
-bool RV3032_RecoverFromBadPMU(void)
-{
-    /* Check if RTC responds */
-    if (HAL_I2C_IsDeviceReady(&hi2c1, 0x51 << 1, 3, 100) != HAL_OK)
-        return false;  /* Still not responding — VBACKUP may still be connected */
 
-    /* 1. Disable auto EEPROM refresh */
-    uint8_t ctrl1 = RV3032_ReadRegister(0x10);
-    ctrl1 |= (1 << 2);  /* EERD = 1 */
-    RV3032_WriteRegister(0x10, ctrl1);
-
-    /* 2. Wait for EEbusy */
-    HAL_Delay(100);
-    for (int i = 0; i < 200; i++) {
-        if (!(RV3032_ReadRegister(0x0E) & (1 << 2)))
-            break;
-        HAL_Delay(1);
-    }
-
-    /* 3. Write PMU = 0x00 to RAM mirror (BSM=00, TCR=00, TCM=00) */
-    RV3032_WriteRegister(0xC0, 0x00);
-
-    /* 4. Burn to EEPROM using single-byte write */
-    RV3032_WriteRegister(0x3D, 0xC0);  /* EE Address = PMU */
-    RV3032_WriteRegister(0x3E, 0x00);  /* EE Data = 0x00   */
-    RV3032_WriteRegister(0x3F, 0x21);  /* Write single byte cmd */
-
-    /* 5. Wait for burn to complete */
-    HAL_Delay(50);
-    for (int i = 0; i < 200; i++) {
-        if (!(RV3032_ReadRegister(0x0E) & (1 << 2)))
-            break;
-        HAL_Delay(1);
-    }
-
-    /* 6. Also do a bulk update to be safe */
-    RV3032_WriteRegister(0x3F, 0x11);
-    HAL_Delay(50);
-    for (int i = 0; i < 200; i++) {
-        if (!(RV3032_ReadRegister(0x0E) & (1 << 2)))
-            break;
-        HAL_Delay(1);
-    }
-
-    /* 7. Re-enable auto refresh */
-    ctrl1 = RV3032_ReadRegister(0x10);
-    ctrl1 &= ~(1 << 2);  /* EERD = 0 */
-    RV3032_WriteRegister(0x10, ctrl1);
-
-    /* 8. Verify it took */
-    HAL_Delay(100);
-    uint8_t verify = RV3032_ReadRegister(0xC0);
-    return (verify == 0x00);
-}
 /* USER CODE END 0 */
 
 /**
@@ -155,7 +101,6 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  RV3032_RecoverFromBadPMU();
 
   // Initialize display
   Matrix_Init();
@@ -198,6 +143,12 @@ int main(void)
     /* Initialize timer apps */
     Stopwatch_Init();
     Countdown_Init();
+
+    /* Load persistent settings from RV-3032 EEPROM */
+    Settings_LoadFromEEPROM();
+
+    /* Restore last-viewed screen */
+    Screen_SetCurrent(Settings_GetSavedScreen());
 //    Calorie_Init();
 
 //   Screen_Register(Screen_Logo2);
@@ -237,6 +188,27 @@ int main(void)
 	    }
 
 	    Rotary_Update();
+
+	    /* Save screen index only after dwelling on it for 5 minutes.
+	     * Resets whenever the user scrolls to a different screen.
+	     * Only writes once per dwell — must leave and come back to save again. */
+	    {
+	        static int tracked_screen = -1;
+	        static uint32_t screen_arrived = 0;
+	        static bool screen_saved = false;
+
+	        int cur = Screen_GetCurrent();
+
+	        if (cur != tracked_screen) {
+	            tracked_screen = cur;
+	            screen_arrived = HAL_GetTick();
+	            screen_saved = false;
+	        } else if (!screen_saved && (HAL_GetTick() - screen_arrived) >= 300000) {
+	            Settings_SetSavedScreen((uint8_t)cur);
+	            Settings_SaveToEEPROM();
+	            screen_saved = true;
+	        }
+	    }
 
 	    // Mark screen dirty if sensor data changed
 	    if (SensorManager_HasChanged()) {

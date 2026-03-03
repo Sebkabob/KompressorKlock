@@ -43,26 +43,56 @@ bool Settings_IsOnOK(void);
 
 /* ================= GLOBAL DISPLAY PREFERENCES ================= */
 
-/**
- * @brief Check if display is in 24-hour mode
- * @return true if 24-hour, false if 12-hour
- */
 bool Settings_Is24Hour(void);
-
-/**
- * @brief Set 12/24 hour mode
- */
 void Settings_Set24Hour(bool enabled);
-
-/**
- * @brief Check if temperature should be displayed in Celsius
- * @return true if Celsius, false if Fahrenheit
- */
 bool Settings_IsCelsius(void);
+void Settings_SetCelsius(bool enabled);
+
+/* ================= EEPROM PERSISTENCE ================= */
+/*
+ * Uses the RV-3032 User EEPROM (32 bytes at 0xCB–0xEA) to store
+ * settings that survive full power cycles.
+ *
+ * Stored settings:
+ *   - 12/24 hour mode
+ *   - °C / °F temperature unit
+ *   - Auto / manual brightness + manual percent
+ *   - Last active screen index
+ *
+ * Call Settings_LoadFromEEPROM() once at startup AFTER SensorManager_Init,
+ * Screen_Init, and all Screen_Register calls.
+ *
+ * Call Settings_SaveToEEPROM() when exiting settings or when the active
+ * screen changes. Only bytes that actually changed are written to protect
+ * EEPROM endurance (~100k writes per byte).
+ */
 
 /**
- * @brief Set temperature unit
+ * @brief Load settings from RV-3032 User EEPROM and apply them.
+ *        If EEPROM is blank or corrupt, writes current defaults.
  */
-void Settings_SetCelsius(bool enabled);
+void Settings_LoadFromEEPROM(void);
+
+/**
+ * @brief Save current settings to EEPROM (only changed bytes).
+ *        Safe to call frequently — no-ops if nothing changed.
+ */
+void Settings_SaveToEEPROM(void);
+
+/**
+ * @brief Mark that something changed and needs saving.
+ */
+void Settings_MarkEEPROMDirty(void);
+
+/**
+ * @brief Check if there are unsaved changes.
+ */
+bool Settings_IsEEPROMDirty(void);
+
+/**
+ * @brief Store/retrieve the last active screen index.
+ */
+void Settings_SetSavedScreen(uint8_t index);
+uint8_t Settings_GetSavedScreen(void);
 
 #endif // SETTINGS_H
