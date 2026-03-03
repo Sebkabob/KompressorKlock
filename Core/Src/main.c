@@ -123,13 +123,20 @@ int main(void)
   /* Hold dark for 250ms */
   HAL_Delay(250);
 
-  /* Fade in: 0% to 100% over 750ms */
+  /* Fade in: 0 to 255 over 750ms (linear ramp — LUT handles gamma) */
   {
       uint32_t fade_start = HAL_GetTick();
-      while ((HAL_GetTick() - fade_start) < 750) {
+      uint8_t last_b = 0;
+
+      while (1) {
           uint32_t elapsed = HAL_GetTick() - fade_start;
-          uint8_t brightness = (uint8_t)((uint32_t)elapsed * 255 / 750);
-          Matrix_SetBrightness(brightness);
+          if (elapsed >= 750) break;
+
+          uint8_t b = (uint8_t)((uint32_t)elapsed * 255 / 750);
+          if (b != last_b) {
+              last_b = b;
+              Matrix_SetBrightness(b);
+          }
           HAL_Delay(5);
       }
       Matrix_SetBrightness(255);
@@ -171,7 +178,6 @@ int main(void)
       Screen_SetCurrent(saved);
       Screen_BootDissolve();
   }
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
