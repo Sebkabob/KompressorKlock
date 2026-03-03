@@ -57,5 +57,12 @@ void Screen_ExitSettings(void);
 
 void Screen_SetCurrent(int index);
 
+/**
+ * @brief Boot dissolve: transitions from the boot logo into the
+ *        current screen with a dissolve effect.
+ *        Call after Screen_SetCurrent().
+ */
+void Screen_BootDissolve(void);
+
 
 #endif // SCREENS_H

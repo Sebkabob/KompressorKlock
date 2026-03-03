@@ -101,63 +101,76 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-
-  // Initialize display
   Matrix_Init();
-
   Rotary_Init();
-
   HAL_TIM_Base_Start_IT(&htim3);
-
   HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
 
-  // Initialize all sensors
-    SensorManager_Init(&hi2c1);
+  /* Initialize all sensors EARLY so data is ready before first render */
+  SensorManager_Init(&hi2c1);
 
-    // Initialize screen manager and register screens
-    Screen_Init();                                    // ← must come first
+  /* ---- BOOT ANIMATION START ---- */
 
-//    Screen_Register(Screen_LightDebug);
+  /* Render logo into display buffer while screen is dark */
+  Matrix_SetBrightness(0);
+  {
+      uint8_t logo_buf[NUM_ROWS][TOTAL_BYTES];
+      memset(logo_buf, 0, sizeof(logo_buf));
+      Matrix_DrawBitmap_Buf(logo_buf, kompressor_logo);
+      Matrix_LoadBuffer(logo_buf);
+  }
 
-//    Screen_Register(Screen_Logo);
-    Screen_Register(Screen_Time);
-    Screen_Register(Screen_TimeTempHumid);
-    Screen_Register(Screen_Battery);
-    Screen_Register(Screen_TimeDate);
-    Screen_Register(Screen_TimeTempBatt);
+  /* Hold dark for 250ms */
+  HAL_Delay(250);
 
-//    calorie_screen_index = Screen_Register(Screen_Calories);
-//    Rotary_SetCalorieScreenIndex(calorie_screen_index);
+  /* Fade in: 0% to 100% over 750ms */
+  {
+      uint32_t fade_start = HAL_GetTick();
+      while ((HAL_GetTick() - fade_start) < 750) {
+          uint32_t elapsed = HAL_GetTick() - fade_start;
+          uint8_t brightness = (uint8_t)((uint32_t)elapsed * 255 / 750);
+          Matrix_SetBrightness(brightness);
+          HAL_Delay(5);
+      }
+      Matrix_SetBrightness(255);
+  }
 
-    /* Register interactive timer screens (AFTER Screen_Init!) */
-    stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
-    countdown_screen_index = Screen_Register(Screen_Countdown);
+  /* Hold logo for 1.5 seconds */
+  HAL_Delay(1500);
 
-    /* Tell rotary which screens are interactive */
-    Rotary_SetStopwatchScreenIndex(stopwatch_screen_index);
-    Rotary_SetCountdownScreenIndex(countdown_screen_index);
+  /* ---- BOOT ANIMATION END ---- */
 
-    /* Initialize buzzer (PC6) */
-    Buzzer_Init();
+  /* Pump sensors once more so first screen render has fresh data */
+  SensorManager_Update();
 
-    /* Initialize timer apps */
-    Stopwatch_Init();
-    Countdown_Init();
+  /* Initialize screen manager and register screens */
+  Screen_Init();
 
-    /* Load persistent settings from RV-3032 EEPROM */
-    Settings_LoadFromEEPROM();
+  Screen_Register(Screen_Time);
+  Screen_Register(Screen_TimeTempHumid);
+  Screen_Register(Screen_Battery);
+  Screen_Register(Screen_TimeDate);
+  Screen_Register(Screen_TimeTempBatt);
 
-    /* Restore last-viewed screen */
-    Screen_SetCurrent(Settings_GetSavedScreen());
-//    Calorie_Init();
+  stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
+  countdown_screen_index = Screen_Register(Screen_Countdown);
 
-//   Screen_Register(Screen_Logo2);
-//   Screen_Register(Screen_Battery2);
-//   Screen_Register(Screen_TimeLight);
+  Rotary_SetStopwatchScreenIndex(stopwatch_screen_index);
+  Rotary_SetCountdownScreenIndex(countdown_screen_index);
 
+  Buzzer_Init();
+  Stopwatch_Init();
+  Countdown_Init();
 
-//  Screen_SetAutoCycle(false);
-//  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
+  /* Load persistent settings from RV-3032 EEPROM */
+  Settings_LoadFromEEPROM();
+
+  /* Dissolve from boot logo into the restored screen */
+  {
+      uint8_t saved = Settings_GetSavedScreen();
+      Screen_SetCurrent(saved);
+      Screen_BootDissolve();
+  }
 
   /* USER CODE END 2 */
 
@@ -189,9 +202,7 @@ int main(void)
 
 	    Rotary_Update();
 
-	    /* Save screen index only after dwelling on it for 5 minutes.
-	     * Resets whenever the user scrolls to a different screen.
-	     * Only writes once per dwell — must leave and come back to save again. */
+	    /* Save screen index only after dwelling on it for 5 minutes. */
 	    {
 	        static int tracked_screen = -1;
 	        static uint32_t screen_arrived = 0;

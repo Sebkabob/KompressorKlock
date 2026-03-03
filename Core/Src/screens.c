@@ -499,3 +499,22 @@ void Screen_SetCurrent(int index)
         sm.state = STATE_IDLE;
     }
 }
+
+void Screen_BootDissolve(void)
+{
+    if (sm.state == STATE_TRANSITIONING) return;
+    if (sm.screen_count == 0) return;
+
+    /* Re-render the boot logo as the "from" frame */
+    memset(sm.buf_current, 0, sizeof(sm.buf_current));
+    Matrix_DrawBitmap_Buf(sm.buf_current, kompressor_logo);
+
+    /* Render the target screen as the "to" frame */
+    memset(sm.buf_target, 0, sizeof(sm.buf_target));
+    if (sm.screens[sm.current_screen]) {
+        sm.screens[sm.current_screen](sm.buf_target);
+    }
+
+    sm.target_screen = sm.current_screen;
+    begin_transition_with_buffers(TRANSITION_DISSOLVE);
+}
