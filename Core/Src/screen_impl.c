@@ -372,3 +372,25 @@ void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
+
+void Screen_TimeDateCompact(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    const SensorData_t *data = SensorManager_GetData();
+    char time_str[16];
+    char date_str[16];
+
+    sprintf(time_str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
+    Matrix_DrawText_Buf(buf, 0, 0, time_str);
+
+    uint8_t month = RV3032_GetMonth();
+    uint8_t date = RV3032_GetDate();
+    uint8_t year = (uint8_t)(RV3032_GetYear() - 2000);
+
+    if (Settings_Is24Hour()) {
+        sprintf(date_str, "%d/%d/%02d", date, month, year);
+    } else {
+        sprintf(date_str, "%d/%d/%02d", month, date, year);
+    }
+
+    Matrix_DrawTextRight_Buf(buf, 0, date_str);
+}

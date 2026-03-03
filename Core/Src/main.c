@@ -207,6 +207,7 @@ int main(void)
 
   Screen_Register(Screen_Time);
   Screen_Register(Screen_TimeDate);
+  Screen_Register(Screen_TimeDateCompact);
   Screen_Register(Screen_TimeTempHumid);
   battery_screen_index = Screen_Register(Screen_Battery);
 //  Screen_Register(Screen_TimeTempBatt);

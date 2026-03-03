@@ -44,4 +44,6 @@ void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
  */
 void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
+void Screen_TimeDateCompact(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
 #endif // SCREEN_IMPL_H
