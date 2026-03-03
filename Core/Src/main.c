@@ -23,6 +23,8 @@
 #include "buzzer.h"
 #include "timer_app.h"
 #include "calorie_app.h"
+#include <string.h>
+#include "settings.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -130,9 +132,9 @@ int main(void)
 
       while (1) {
           uint32_t elapsed = HAL_GetTick() - fade_start;
-          if (elapsed >= 750) break;
+          if (elapsed >= 500) break;
 
-          uint8_t b = (uint8_t)((uint32_t)elapsed * 255 / 750);
+          uint8_t b = (uint8_t)((uint32_t)elapsed * 255 / 500);
           if (b != last_b) {
               last_b = b;
               Matrix_SetBrightness(b);
@@ -143,7 +145,7 @@ int main(void)
   }
 
   /* Hold logo for 1.5 seconds */
-  HAL_Delay(1500);
+  HAL_Delay(1000);
 
   /* ---- BOOT ANIMATION END ---- */
 

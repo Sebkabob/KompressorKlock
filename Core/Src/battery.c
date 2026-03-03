@@ -33,6 +33,21 @@ bool BATTERY_Init(void)
         return false;
     }
 
+    /*
+     * Only reconfigure the gauge if it experienced a power-on reset
+     * (ITPOR flag set). If only the MCU power-cycled but the battery
+     * kept the gauge alive, skip config to preserve the learned SOC
+     * impedance track model. Entering config mode triggers a soft
+     * reset which destroys the learned data and causes SOC to jump.
+     */
+    if (!bq27427_itpor_flag()) {
+        /* Gauge remembers everything — no config needed */
+        battery_state.last_update = 0;
+        return true;
+    }
+
+    /* Gauge had a POR — full configuration needed */
+
     // Set chemistry profile to CHEM_B (4.2V LiPo) if not already set
     bq27427_chemistry_t current_chem = bq27427_chem_id();
     if (current_chem != BQ27427_CHEM_B) {
@@ -42,34 +57,24 @@ bool BATTERY_Init(void)
         HAL_Delay(100);
     }
 
-    // Check if already configured correctly
-    uint16_t current_capacity = bq27427_capacity(BQ27427_CAPACITY_DESIGN);
-    uint16_t current_terminate_voltage = bq27427_terminate_voltage();
-    uint16_t current_taper_rate = bq27427_taper_rate();
-    uint16_t current_taper_voltage = bq27427_taper_voltage();
-
-    bool needs_config = (current_capacity != 4900) ||
-                        (current_terminate_voltage != 3000) ||
-                        (current_taper_rate != 100) ||
-                        (current_taper_voltage != 4040);
-
-    if (needs_config) {
-        if (!bq27427_enter_config(true)) {
-            return false;
-        }
-
-        bq27427_set_current_polarity(0); // 0 = Positive current means battery is charging
-        bq27427_set_capacity(4900);
-        bq27427_set_terminate_voltage(3000);
-        bq27427_set_taper_voltage(4040);
-        bq27427_set_taper_rate(100);  // (300mAh / 30mA) * 10 = 100, CUTS OFF AT 26mA CHARGING
-
-        if (!bq27427_exit_config(true)) {
-            return false;
-        }
-
-        HAL_Delay(500);
+    if (!bq27427_enter_config(true)) {
+        return false;
     }
+
+    bq27427_set_current_polarity(0); // 0 = Positive current means battery is charging
+    bq27427_set_capacity(4900);
+    bq27427_set_terminate_voltage(3000);
+    bq27427_set_taper_voltage(4040);
+    bq27427_set_taper_rate(100);  // (300mAh / 30mA) * 10 = 100, CUTS OFF AT 26mA CHARGING
+
+    if (!bq27427_exit_config(true)) {
+        return false;
+    }
+
+    HAL_Delay(500);
+
+    /* Clear ITPOR so we don't reconfigure on the next MCU reset */
+    bq27427_clear_itpor();
 
     battery_state.last_update = 0;
     return true;

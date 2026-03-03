@@ -572,6 +572,13 @@ uint16_t bq27427_status(void);
  */
 bool bq27427_reset(void);
 
+/**
+ * @brief Clear the ITPOR flag by issuing BAT_INSERT control command.
+ *        Call after configuring the gauge to prevent reconfiguration on next boot.
+ * @return true on success
+ */
+bool bq27427_clear_itpor(void);
+
 #ifdef __cplusplus
 }
 #endif
