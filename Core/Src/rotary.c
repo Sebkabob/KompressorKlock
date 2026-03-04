@@ -3,7 +3,7 @@
 #include "screens.h"
 #include "settings.h"
 #include "timer_app.h"
-#include "calorie_app.h"
+#include "world_clock.h"
 
 static const int8_t encoder_lut[16] = {
       0,     1,    -1,     0,
@@ -20,13 +20,13 @@ static const int8_t encoder_lut[16] = {
 #define LONG_PRESS_MS       2000u
 
 /* ================= INTERACTIVE SCREEN TRACKING ================= */
-static int stopwatch_screen_index = -1;
-static int countdown_screen_index = -1;
-static int calorie_screen_index   = -1;
+static int stopwatch_screen_index  = -1;
+static int countdown_screen_index  = -1;
+static int worldclock_screen_index = -1;
 
-void Rotary_SetStopwatchScreenIndex(int idx) { stopwatch_screen_index = idx; }
-void Rotary_SetCountdownScreenIndex(int idx) { countdown_screen_index = idx; }
-void Rotary_SetCalorieScreenIndex(int idx)   { calorie_screen_index = idx; }
+void Rotary_SetStopwatchScreenIndex(int idx)  { stopwatch_screen_index = idx; }
+void Rotary_SetCountdownScreenIndex(int idx)  { countdown_screen_index = idx; }
+void Rotary_SetWorldClockScreenIndex(int idx) { worldclock_screen_index = idx; }
 
 static bool on_stopwatch_screen(void)
 {
@@ -38,14 +38,14 @@ static bool on_countdown_screen(void)
     return (Screen_GetCurrent() == countdown_screen_index && countdown_screen_index >= 0);
 }
 
-static bool on_calorie_screen(void)
+static bool on_worldclock_screen(void)
 {
-    return (Screen_GetCurrent() == calorie_screen_index && calorie_screen_index >= 0);
+    return (Screen_GetCurrent() == worldclock_screen_index && worldclock_screen_index >= 0);
 }
 
 static bool on_timer_screen(void)
 {
-    return on_stopwatch_screen() || on_countdown_screen() || on_calorie_screen();
+    return on_stopwatch_screen() || on_countdown_screen() || on_worldclock_screen();
 }
 
 static bool scroll_claimed(void)
@@ -53,8 +53,9 @@ static bool scroll_claimed(void)
     if (on_countdown_screen()) {
         return (Countdown_GetState() == CD_STATE_SETTING);
     }
-    if (on_calorie_screen()) {
-        return (Calorie_GetState() == CAL_STATE_EDITING);
+    if (on_worldclock_screen()) {
+        WorldClockState_t wcs = WorldClock_GetState();
+        return (wcs == WC_STATE_EDITING_TZ1 || wcs == WC_STATE_EDITING_TZ2);
     }
     return false;
 }
@@ -77,7 +78,6 @@ static bool     sw_hold_consumed = false;
 
 static uint8_t  bar_height = 0;
 
-/* Helper: consume hold and clear bar in one place */
 static void consume_hold(void)
 {
     sw_hold_consumed = true;
@@ -141,7 +141,7 @@ void Rotary_Init(void)
     HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 }
 
-/* ================= UPDATE (call from main loop ~5ms) ================= */
+/* ================= UPDATE ================= */
 
 void Rotary_Update(void)
 {
@@ -158,7 +158,7 @@ void Rotary_Update(void)
         }
     }
 
-    /* ---- Press bar: update hold height ---- */
+    /* ---- Press bar ---- */
     if (sw_held && !sw_hold_consumed) {
         uint32_t held_ms = now - sw_held_since;
         uint32_t fill_ms = on_timer_screen() ? TIMER_HOLD_MS : LONG_PRESS_MS;
@@ -202,8 +202,8 @@ void Rotary_Update(void)
                 while (pending_steps >= DETENT_THRESHOLD) {
                     if (on_countdown_screen())
                         Countdown_OnScroll(-1);
-                    else if (on_calorie_screen())
-                        Calorie_OnScroll(-1);
+                    else if (on_worldclock_screen())
+                        WorldClock_OnScroll(-1);
                     Screen_MarkDirty();
                     pending_steps -= DETENT_THRESHOLD;
                     last_step_tick = now;
@@ -211,8 +211,8 @@ void Rotary_Update(void)
                 while (pending_steps <= -DETENT_THRESHOLD) {
                     if (on_countdown_screen())
                         Countdown_OnScroll(1);
-                    else if (on_calorie_screen())
-                        Calorie_OnScroll(1);
+                    else if (on_worldclock_screen())
+                        WorldClock_OnScroll(1);
                     Screen_MarkDirty();
                     pending_steps += DETENT_THRESHOLD;
                     last_step_tick = now;
@@ -233,7 +233,7 @@ void Rotary_Update(void)
         }
     }
 
-    /* ---- Switch (active-low, pulled up) ---- */
+    /* ---- Switch ---- */
     {
         bool raw = (HAL_GPIO_ReadPin(ROT_SW_GPIO_Port, ROT_SW_Pin) == GPIO_PIN_SET);
 
@@ -248,7 +248,6 @@ void Rotary_Update(void)
                 sw_stable = raw;
 
                 if (!sw_stable) {
-                    /* Button just pressed down */
                     sw_held = true;
                     sw_held_since = now;
                     sw_hold_consumed = false;
@@ -259,7 +258,6 @@ void Rotary_Update(void)
                         consume_hold();
                     }
                 } else {
-                    /* Button just released */
                     sw_held = false;
                     bar_height = 0;
                     Screen_MarkDirty();
@@ -274,9 +272,12 @@ void Rotary_Update(void)
                         } else if (on_countdown_screen()) {
                             Countdown_OnPress();
                             Screen_MarkDirty();
-                        } else if (on_calorie_screen()) {
-                            Calorie_OnPress();
-                            Screen_MarkDirty();
+                        } else if (on_worldclock_screen()) {
+                            WorldClockState_t wcs = WorldClock_GetState();
+                            if (wcs == WC_STATE_EDITING_TZ1 || wcs == WC_STATE_EDITING_TZ2) {
+                                WorldClock_OnPress();
+                                Screen_MarkDirty();
+                            }
                         } else {
                             sw_pressed_flag = true;
                         }
@@ -297,9 +298,12 @@ void Rotary_Update(void)
                     } else if (on_countdown_screen()) {
                         Countdown_OnLongPress();
                         consume_hold();
-                    } else if (on_calorie_screen()) {
-                        Calorie_OnLongPress();
-                        consume_hold();
+                    } else if (on_worldclock_screen()) {
+                        WorldClockState_t wcs = WorldClock_GetState();
+                        if (wcs == WC_STATE_DISPLAY) {
+                            WorldClock_OnLongPress();
+                            consume_hold();
+                        }
                     }
                 }
             }
@@ -314,8 +318,9 @@ void Rotary_Update(void)
                     timer_busy = (cds == CD_STATE_RUNNING || cds == CD_STATE_PAUSED ||
                                   cds == CD_STATE_SETTING);
                 }
-                if (on_calorie_screen()) {
-                    timer_busy = true;
+                if (on_worldclock_screen()) {
+                    WorldClockState_t wcs = WorldClock_GetState();
+                    timer_busy = (wcs == WC_STATE_EDITING_TZ1 || wcs == WC_STATE_EDITING_TZ2);
                 }
 
                 if (!timer_busy) {

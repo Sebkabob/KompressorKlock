@@ -603,3 +603,98 @@ void Matrix_DrawBatteryIcon_Blink_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES],
         }
     }
 }
+
+/* =====================================================================
+ *  TINY 3x5 FONT — append this to the bottom of matrix.c
+ *
+ *  Each glyph is 3 columns wide, 5 rows tall.
+ *  Stored as 3 bytes per character: each byte is one column,
+ *  bit 0 = top row, bit 4 = bottom row.
+ * =====================================================================*/
+
+static const uint8_t tiny_font[][3] = {
+    /* [ 0] ' ' */ {0x00, 0x00, 0x00},
+    /* [ 1] A   */ {0x1E, 0x05, 0x1E},
+    /* [ 2] B   */ {0x1F, 0x15, 0x0A},
+    /* [ 3] C   */ {0x0E, 0x11, 0x11},
+    /* [ 4] D   */ {0x1F, 0x11, 0x0E},
+    /* [ 5] E   */ {0x1F, 0x15, 0x11},
+    /* [ 6] F   */ {0x1F, 0x05, 0x01},
+    /* [ 7] G   */ {0x0E, 0x11, 0x1D},
+    /* [ 8] H   */ {0x1F, 0x04, 0x1F},
+    /* [ 9] I   */ {0x11, 0x1F, 0x11},
+    /* [10] J   */ {0x08, 0x10, 0x0F},
+    /* [11] K   */ {0x1F, 0x04, 0x1B},
+    /* [12] L   */ {0x1F, 0x10, 0x10},
+    /* [13] M   */ {0x1F, 0x02, 0x1F},
+    /* [14] N   */ {0x1F, 0x01, 0x1F},
+    /* [15] O   */ {0x0E, 0x11, 0x0E},
+    /* [16] P   */ {0x1F, 0x05, 0x02},
+    /* [17] Q   */ {0x0E, 0x19, 0x1E},
+    /* [18] R   */ {0x1F, 0x05, 0x1A},
+    /* [19] S   */ {0x12, 0x15, 0x09},
+    /* [20] T   */ {0x01, 0x1F, 0x01},
+    /* [21] U   */ {0x0F, 0x10, 0x0F},
+    /* [22] V   */ {0x07, 0x18, 0x07},
+    /* [23] W   */ {0x1F, 0x08, 0x1F},
+    /* [24] X   */ {0x1B, 0x04, 0x1B},
+    /* [25] Y   */ {0x03, 0x1C, 0x03},
+    /* [26] Z   */ {0x19, 0x15, 0x13},
+    /* [27] 0   */ {0x0E, 0x11, 0x0E},
+    /* [28] 1   */ {0x12, 0x1F, 0x10},
+    /* [29] 2   */ {0x1A, 0x15, 0x12},
+    /* [30] 3   */ {0x11, 0x15, 0x0A},
+    /* [31] 4   */ {0x07, 0x04, 0x1F},
+    /* [32] 5   */ {0x17, 0x15, 0x09},
+    /* [33] 6   */ {0x0E, 0x15, 0x08},
+    /* [34] 7   */ {0x01, 0x19, 0x07},
+    /* [35] 8   */ {0x0A, 0x15, 0x0A},
+    /* [36] 9   */ {0x02, 0x15, 0x0E},
+    /* [37] :   */ {0x00, 0x0A, 0x00},
+};
+
+static int tiny_font_index(char c)
+{
+    if (c == ' ') return 0;
+    if (c >= 'A' && c <= 'Z') return 1 + (c - 'A');
+    if (c >= 'a' && c <= 'z') return 1 + (c - 'a');
+    if (c >= '0' && c <= '9') return 27 + (c - '0');
+    if (c == ':') return 37;
+    return 0;
+}
+
+void Matrix_DrawTinyChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c)
+{
+    int idx = tiny_font_index(c);
+    const uint8_t *glyph = tiny_font[idx];
+
+    for (int x = 0; x < 3; x++) {
+        uint8_t column = glyph[x];
+        for (int y = 0; y < 5; y++) {
+            if (column & (1 << y)) {
+                int r = row + y;
+                int cx = col + x;
+                if (r >= 0 && r < NUM_ROWS && cx >= 0 && cx < NUM_COLS) {
+                    buf[r][cx / 8] |= (1 << (cx % 8));
+                }
+            }
+        }
+    }
+}
+
+void Matrix_DrawTinyText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text)
+{
+    while (*text) {
+        Matrix_DrawTinyChar_Buf(buf, row, col, *text);
+        col += 4; /* 3px glyph + 1px gap */
+        text++;
+    }
+}
+
+int Matrix_TinyTextPixelWidth(const char *text)
+{
+    int len = 0;
+    while (*text) { len++; text++; }
+    if (len == 0) return 0;
+    return len * 4 - 1; /* 3px per char + 1px gap, minus trailing gap */
+}

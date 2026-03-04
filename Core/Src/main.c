@@ -22,7 +22,7 @@
 #include "rotary.h"
 #include "buzzer.h"
 #include "timer_app.h"
-#include "calorie_app.h"
+#include "world_clock.h"
 #include <string.h>
 #include "settings.h"
 /* USER CODE END Includes */
@@ -49,11 +49,12 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-static int scroll_screen_index = -1;
 static int stopwatch_screen_index = -1;
 static int countdown_screen_index = -1;
-static int calorie_screen_index = -1;
 static int battery_screen_index = -1;
+static int worldclock_screen_index = -1;
+static int pixelrain_screen_index = -1;
+static int bigdigit_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -135,21 +136,15 @@ int main(void)
   /* USER CODE BEGIN 2 */
   Matrix_Init();
 
-  /* Shift out 84 zeros to blank the shift registers before
-     TIM3 starts scanning rows. This clears any stale data
-     from the previous power cycle that causes glitches. */
   {
-      /* Ensure all rows OFF */
       GPIOA->BSRR = A1_Pin | A2_Pin | A3_Pin | A4_Pin
                    | A5_Pin | A6_Pin | A7_Pin;
 
-      /* Clock 84 zero-bits into the shift register chain */
-      GPIOA->BRR = DATA_Pin;  /* DATA low */
+      GPIOA->BRR = DATA_Pin;
       for (int i = 0; i < 84; i++) {
           GPIOA->BSRR = SRCLK_Pin;
           GPIOA->BRR  = SRCLK_Pin;
       }
-      /* Latch */
       GPIOA->BSRR = RCLK_Pin;
       GPIOA->BRR  = RCLK_Pin;
   }
@@ -158,12 +153,10 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim3);
   HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
 
-  /* Initialize all sensors EARLY so data is ready before first render */
   SensorManager_Init(&hi2c1);
 
-  /* ---- BOOT ANIMATION START ---- */
+  /* ---- BOOT ANIMATION ---- */
 
-  /* Render logo into display buffer while screen is dark */
   Matrix_SetBrightness(0);
   {
       uint8_t logo_buf[NUM_ROWS][TOTAL_BYTES];
@@ -172,10 +165,8 @@ int main(void)
       Matrix_LoadBuffer(logo_buf);
   }
 
-  /* Hold dark for 250ms */
   HAL_Delay(250);
 
-  /* Fade in: 0 to 255 over 750ms (linear ramp — LUT handles gamma) */
   {
       uint32_t fade_start = HAL_GetTick();
       uint8_t last_b = 0;
@@ -194,23 +185,29 @@ int main(void)
       Matrix_SetBrightness(255);
   }
 
-  /* Hold logo for 1.5 seconds */
   HAL_Delay(1000);
 
-  /* ---- BOOT ANIMATION END ---- */
-
-  /* Pump sensors once more so first screen render has fresh data */
   SensorManager_Update();
 
   /* Initialize screen manager and register screens */
   Screen_Init();
 
+  /* ---- CLOCK FACE SCREENS ---- */
   Screen_Register(Screen_Time);
   Screen_Register(Screen_TimeDate);
   Screen_Register(Screen_TimeDateCompact);
   Screen_Register(Screen_TimeTempHumid);
+//  Screen_Register(Screen_FuzzyTime);
+  bigdigit_screen_index = Screen_Register(Screen_BigDigit);
+
+  /* ---- UTILITY SCREENS ---- */
   battery_screen_index = Screen_Register(Screen_Battery);
-//  Screen_Register(Screen_TimeTempBatt);
+
+  worldclock_screen_index = Screen_Register(Screen_WorldClock);
+  Rotary_SetWorldClockScreenIndex(worldclock_screen_index);
+  WorldClock_Init();
+
+  pixelrain_screen_index = Screen_Register(Screen_PixelRain);
 
   stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
   countdown_screen_index = Screen_Register(Screen_Countdown);
@@ -222,10 +219,8 @@ int main(void)
   Stopwatch_Init();
   Countdown_Init();
 
-  /* Load persistent settings from RV-3032 EEPROM */
   Settings_LoadFromEEPROM();
 
-  /* Dissolve from boot logo into the restored screen */
   {
       uint8_t saved = Settings_GetSavedScreen();
       Screen_SetCurrent(saved);
@@ -241,27 +236,26 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	    // Update all sensor readings
 	    SensorManager_Update();
 
-	    /* Update timer apps */
 	    Stopwatch_Update();
 	    Countdown_Update();
 
-	    /* Update buzzer (non-blocking beep patterns) */
 	    Buzzer_Update();
 
-	    /* Mark timer screens dirty when they need redraw */
 	    if (Screen_GetCurrent() == stopwatch_screen_index && Stopwatch_NeedsRedraw()) {
 	        Screen_MarkDirty();
 	    }
 	    if (Screen_GetCurrent() == countdown_screen_index && Countdown_NeedsRedraw()) {
 	        Screen_MarkDirty();
 	    }
+	    if (Screen_GetCurrent() == worldclock_screen_index && WorldClock_NeedsRedraw()) {
+	        Screen_MarkDirty();
+	    }
 
 	    Rotary_Update();
 
-	    /* Save screen index only after dwelling on it for 5 minutes. */
+	    /* Save screen index after dwelling 5 minutes */
 	    {
 	        static int tracked_screen = -1;
 	        static uint32_t screen_arrived = 0;
@@ -280,52 +274,43 @@ int main(void)
 	        }
 	    }
 
-	    // Mark screen dirty if sensor data changed
 	    if (SensorManager_HasChanged()) {
 	        Screen_MarkDirty();
 	    }
 
-	    // Keep scroll screen continuously dirty (it needs constant updates)
-	    if (Screen_GetCurrent() == scroll_screen_index) {
+	    /* Continuously animated screens */
+	    if (Screen_GetCurrent() == pixelrain_screen_index) {
+	        Screen_MarkDirty();
+	    }
+	    if (Screen_GetCurrent() == bigdigit_screen_index) {
 	        Screen_MarkDirty();
 	    }
 
-	    if (Screen_GetCurrent() == calorie_screen_index && Calorie_NeedsRedraw()) {
-	            Screen_MarkDirty();
-	    }
-
-	    /* Keep calorie screen dirty while editing (for blink animation) */
-	    if (Screen_GetCurrent() == calorie_screen_index &&
-	    		Calorie_GetState() == CAL_STATE_EDITING) {
-	    	Screen_MarkDirty();
-	    }
-
 	    if (battery_screen_index >= 0 && Screen_GetCurrent() == battery_screen_index) {
-	            const SensorData_t *batt_data = SensorManager_GetData();
-	            if (batt_data->current_mA >= 0) {
-	                Screen_MarkDirty();
+	        const SensorData_t *batt_data = SensorManager_GetData();
+	        if (batt_data->current_mA >= 0) {
+	            Screen_MarkDirty();
+	        }
+	    }
+
+	    /* Auto-switch to battery screen when charger plugged in */
+	    {
+	        static bool was_charging = false;
+	        bool charging_now = (SensorManager_GetData()->current_mA >= 0);
+
+	        if (charging_now && !was_charging && battery_screen_index >= 0) {
+	            if (!Screen_IsTransitioning() &&
+	                Settings_GetState() == SETTINGS_STATE_INACTIVE) {
+	                Screen_GoTo(battery_screen_index, TRANSITION_DISSOLVE);
 	            }
 	        }
+	        was_charging = charging_now;
+	    }
 
-	    /* Auto-switch to battery screen when charger is plugged in */
-	        {
-	            static bool was_charging = false;
-	            bool charging_now = (SensorManager_GetData()->current_mA >= 0);
-
-	            if (charging_now && !was_charging && battery_screen_index >= 0) {
-	                if (!Screen_IsTransitioning() &&
-	                    Settings_GetState() == SETTINGS_STATE_INACTIVE) {
-	                    Screen_GoTo(battery_screen_index, TRANSITION_DISSOLVE);
-	                }
-	            }
-	            was_charging = charging_now;
-	        }
-
-	    // Drive screen state machine
 	    Screen_Update();
 
 	    HAL_Delay(5);
-  }
+}
   /* USER CODE END 3 */
 }
 

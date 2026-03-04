@@ -16,34 +16,18 @@ void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
-void Screen_ScrollMessage(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
-/**
- * @brief Stopwatch screen — counts up from 00:00:00
- *        Interactive: press=start/pause, scroll=reset when paused
- *        Shows state icon: > (running), || (paused), [] (stopped)
- */
 void Screen_Stopwatch(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
-
-/**
- * @brief Countdown timer screen — set time then count down
- *        Interactive: scroll=set time/reset, press=start/pause/acknowledge
- *        Flashes and beeps when finished
- */
 void Screen_Countdown(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
-/**
- * @brief Calorie tracker screen — press to enter edit mode,
- *        scroll to adjust by +/-10, press again to lock.
- *        Hold 1s to reset to 0.
- */
-void Screen_Calories(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
-
-/**
- * @brief Debug screen for brightness tuning
- */
 void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
-
 void Screen_TimeDateCompact(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
+/* ================= NEW SCREENS ================= */
+
+void Screen_FuzzyTime(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_BigDigit(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 #endif // SCREEN_IMPL_H
