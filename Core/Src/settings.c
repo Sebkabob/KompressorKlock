@@ -3,6 +3,7 @@
 #include "screens.h"
 #include "sensor_manager.h"
 #include "rtc_rv3032.h"
+#include "world_clock.h"
 #include "matrix.h"
 #include "main.h"
 #include <string.h>
@@ -12,6 +13,27 @@
 static bool use_24hour = false;
 static bool use_celsius = false;
 
+/* ================= HOME TIMEZONE ================= */
+static uint8_t home_tz_index = 4;  /* LAX default */
+
+/* Timezone offset table — mirrors world_clock.c tz_table offsets.
+ * Duplicated here to avoid circular header dependency. */
+static const int8_t tz_offsets[] = {
+    -48, -44, -40, -36, -32, -28, -24, -20,  /* BKR..NYC */
+    -16, -12,  -8,  -4,   0,   4,   8,  12,  /* CCS..MSK */
+     16,  22,  23,  24,  28,  32,  36,  40,  /* DXB..SYD */
+     44,  48                                   /* NOU, AKL */
+};
+
+static const char * const tz_labels[] = {
+    "BKR", "SST", "HNL", "ANC", "LAX", "DEN", "CHI", "NYC",
+    "CCS", "GRU", "GSI", "CVT", "LON", "PAR", "CAI", "MSK",
+    "DXB", "DEL", "KTM", "DAC", "BKK", "SGP", "TKY", "SYD",
+    "NOU", "AKL"
+};
+
+#define TZ_TABLE_SIZE  (sizeof(tz_offsets) / sizeof(tz_offsets[0]))
+
 /* ================= STATE ================= */
 static SettingsState_t state = SETTINGS_STATE_INACTIVE;
 static int menu_index = 0;
@@ -19,23 +41,18 @@ static int menu_index = 0;
 /* =================================================================
  *  EEPROM PERSISTENCE
  *
- *  RV-3032 User EEPROM: 32 bytes at addresses 0xCB–0xEA.
- *  Survives full power loss (VBACKUP powered).
+ *  RV-3032 User EEPROM: 32 bytes at addresses 0xCB-0xEA.
  *
- *  Layout (6 bytes used):
+ *  Layout (9 bytes, version 0x03):
  *    0xCB  magic   (0xA5 = valid block)
  *    0xCC  flags   bit0=24hr, bit1=celsius, bit2=auto_brightness
- *    0xCD  manual_brightness_percent (1–100)
+ *    0xCD  manual_brightness_percent (1-100)
  *    0xCE  last_screen_index
- *    0xCF  version (0x01)
- *    0xD0  checksum (XOR of 0xCB–0xCF)
- *
- *  Single-byte EEPROM access per datasheet §4.6.5 / §4.6.6:
- *    1. EERD=1 (disable auto refresh)
- *    2. Wait EEbusy=0
- *    3. Set EEADDR, EEDATA, EECMD
- *    4. Wait EEbusy=0
- *    5. EERD=0 (re-enable auto refresh)
+ *    0xCF  home_tz_index (0-25)
+ *    0xD0  wc_tz0 — world clock slot 0 timezone index (0-25)
+ *    0xD1  wc_tz1 — world clock slot 1 timezone index (0-25)
+ *    0xD2  version (0x03)
+ *    0xD3  checksum (XOR of 0xCB-0xD2)
  * ================================================================= */
 
 #define USER_EE_BASE        0xCB
@@ -44,13 +61,16 @@ static int menu_index = 0;
 #define ADDR_FLAGS          (USER_EE_BASE + 1)
 #define ADDR_BRIGHTNESS     (USER_EE_BASE + 2)
 #define ADDR_SCREEN         (USER_EE_BASE + 3)
-#define ADDR_VERSION        (USER_EE_BASE + 4)
-#define ADDR_CHECKSUM       (USER_EE_BASE + 5)
+#define ADDR_TIMEZONE       (USER_EE_BASE + 4)
+#define ADDR_WC_TZ0         (USER_EE_BASE + 5)
+#define ADDR_WC_TZ1         (USER_EE_BASE + 6)
+#define ADDR_VERSION        (USER_EE_BASE + 7)
+#define ADDR_CHECKSUM       (USER_EE_BASE + 8)
 
-#define BLOCK_SIZE          6
+#define BLOCK_SIZE          9
 
 #define EE_MAGIC            0xA5
-#define EE_VERSION          0x01
+#define EE_VERSION          0x03
 
 #define FLAG_24HOUR         (1 << 0)
 #define FLAG_CELSIUS        (1 << 1)
@@ -75,12 +95,15 @@ typedef struct {
     uint8_t flags;
     uint8_t brightness;
     uint8_t screen;
+    uint8_t timezone;
+    uint8_t wc_tz0;
+    uint8_t wc_tz1;
     uint8_t version;
     uint8_t checksum;
 } EEBlock_t;
 
-static EEBlock_t ee_cached  = {0};   /* what we want in EEPROM   */
-static EEBlock_t ee_written = {0};   /* what's actually in EEPROM */
+static EEBlock_t ee_cached  = {0};
+static EEBlock_t ee_written = {0};
 static bool ee_dirty = false;
 
 /* ---------- low-level EEPROM helpers ---------- */
@@ -196,6 +219,14 @@ static void ee_build_block(void)
     if (SensorManager_IsAutoBrightness()) ee_cached.flags |= FLAG_AUTO_BRIGHT;
 
     ee_cached.brightness = SensorManager_GetManualBrightnessPercent();
+    ee_cached.timezone   = home_tz_index;
+
+    /* Read current world clock slot selections */
+    int wc0 = WorldClock_GetSlotIndex(0);
+    int wc1 = WorldClock_GetSlotIndex(1);
+    ee_cached.wc_tz0 = (uint8_t)((wc0 >= 0 && wc0 < (int)TZ_TABLE_SIZE) ? wc0 : 7);
+    ee_cached.wc_tz1 = (uint8_t)((wc1 >= 0 && wc1 < (int)TZ_TABLE_SIZE) ? wc1 : 12);
+
     /* screen field is set separately via Settings_SetSavedScreen */
 
     ee_cached.checksum = ee_checksum(&ee_cached);
@@ -214,6 +245,21 @@ static void ee_apply_block(const EEBlock_t *b)
         if (pct > 100) pct = 100;
         SensorManager_SetManualBrightnessPercent(pct);
     }
+
+    /* Restore home timezone */
+    if (b->timezone < TZ_TABLE_SIZE) {
+        home_tz_index = b->timezone;
+    } else {
+        home_tz_index = 4;
+    }
+
+    /* Restore world clock display slots */
+    if (b->wc_tz0 < TZ_TABLE_SIZE) {
+        WorldClock_SetSlotIndex(0, (int)b->wc_tz0);
+    }
+    if (b->wc_tz1 < TZ_TABLE_SIZE) {
+        WorldClock_SetSlotIndex(1, (int)b->wc_tz1);
+    }
 }
 
 /* ================= EEPROM PUBLIC API ================= */
@@ -228,7 +274,7 @@ void Settings_LoadFromEEPROM(void)
         memcpy(&ee_written, &block, sizeof(block));
         ee_apply_block(&block);
     } else {
-        /* First boot or corrupt — write current defaults */
+        /* First boot, corrupt, or version upgrade — write current defaults */
         ee_build_block();
         ee_cached.screen = 0;
         ee_force_write_all();
@@ -269,6 +315,28 @@ uint8_t Settings_GetSavedScreen(void)
     return ee_cached.screen;
 }
 
+/* ================= HOME TIMEZONE PUBLIC API ================= */
+
+int8_t Settings_GetHomeTimezoneOffsetQ(void)
+{
+    if (home_tz_index < TZ_TABLE_SIZE)
+        return tz_offsets[home_tz_index];
+    return -32;
+}
+
+uint8_t Settings_GetHomeTimezoneIndex(void)
+{
+    return home_tz_index;
+}
+
+void Settings_SetHomeTimezoneIndex(uint8_t idx)
+{
+    if (idx < TZ_TABLE_SIZE) {
+        home_tz_index = idx;
+        ee_dirty = true;
+    }
+}
+
 /* ================= SETTING DISPATCH TABLES ================= */
 
 typedef void (*SettingEnterFunc)(void);
@@ -282,9 +350,10 @@ static const SettingEnterFunc setting_enter[SETTING_COUNT] = {
     TimeSetting_Enter,
     DateSetting_Enter,
     BrightnessSetting_Enter,
-    NULL,
-    NULL,
-    NULL,
+    NULL,                       /* 12/24hr — inline toggle */
+    NULL,                       /* temp unit — inline toggle */
+    TimezoneSetting_Enter,
+    NULL,                       /* exit */
 };
 
 static const SettingScrollFunc setting_scroll[SETTING_COUNT] = {
@@ -293,6 +362,7 @@ static const SettingScrollFunc setting_scroll[SETTING_COUNT] = {
     BrightnessSetting_OnScroll,
     NULL,
     NULL,
+    TimezoneSetting_OnScroll,
     NULL,
 };
 
@@ -302,6 +372,7 @@ static const SettingPressFunc setting_press[SETTING_COUNT] = {
     BrightnessSetting_OnPress,
     NULL,
     NULL,
+    TimezoneSetting_OnPress,
     NULL,
 };
 
@@ -311,6 +382,7 @@ static const SettingRenderFunc setting_render[SETTING_COUNT] = {
     BrightnessSetting_Render,
     NULL,
     NULL,
+    TimezoneSetting_Render,
     NULL,
 };
 
@@ -320,6 +392,7 @@ static const SettingNeedsRedrawFunc setting_needs_redraw[SETTING_COUNT] = {
     BrightnessSetting_NeedsRedraw,
     NULL,
     NULL,
+    TimezoneSetting_NeedsRedraw,
     NULL,
 };
 
@@ -329,6 +402,7 @@ static const SettingIsOnOKFunc setting_is_on_ok[SETTING_COUNT] = {
     BrightnessSetting_IsOnOK,
     NULL,
     NULL,
+    TimezoneSetting_IsOnOK,
     NULL,
 };
 
@@ -347,6 +421,7 @@ static const char* get_menu_label(int idx)
         case SETTING_BRIGHTNESS: return "Brightness";
         case SETTING_12_24HR:    return use_24hour ? "24hr" : "12hr";
         case SETTING_TEMP_UNIT:  return use_celsius ? "\x03""C" : "\x03""F";
+        case SETTING_TIMEZONE:   return "Time Zone";
         case SETTING_EXIT:       return "Exit";
         default:                 return "???";
     }
@@ -419,7 +494,7 @@ void Settings_OnPress(void)
         if (setting_press[menu_index]) {
             bool done = setting_press[menu_index]();
             if (done) {
-                if (menu_index == SETTING_BRIGHTNESS) {
+                if (menu_index == SETTING_BRIGHTNESS || menu_index == SETTING_TIMEZONE) {
                     ee_dirty = true;
                 }
                 state = SETTINGS_STATE_MENU;

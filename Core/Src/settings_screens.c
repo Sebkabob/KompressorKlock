@@ -430,3 +430,86 @@ bool BrightnessSetting_IsOnOK(void)
 {
     return true;
 }
+
+/* =====================================================================
+ *  TIMEZONE SETTING
+ *
+ *  Scroll through timezone list. Shows city code + UTC offset.
+ *  Press to confirm. Saved to EEPROM.
+ *
+ *  Display: "NYC UTC-5" or "DEL UTC+5:30"
+ *
+ *  DST-aware zones show a '*' suffix when DST applies, but the
+ *  stored offset is always the standard offset. DST adjustment
+ *  is computed dynamically in world_clock.c based on the current
+ *  date from the RTC.
+ * =====================================================================*/
+
+/* Timezone table — must match the one in settings.c and world_clock.c */
+static const char * const tzs_labels[] = {
+    "BKR", "SST", "HNL", "ANC", "LAX", "DEN", "CHI", "NYC",
+    "CCS", "GRU", "GSI", "CVT", "LON", "PAR", "CAI", "MSK",
+    "DXB", "DEL", "KTM", "DAC", "BKK", "SGP", "TKY", "SYD",
+    "NOU", "AKL"
+};
+
+static const int8_t tzs_offsets[] = {
+    -48, -44, -40, -36, -32, -28, -24, -20,
+    -16, -12,  -8,  -4,   0,   4,   8,  12,
+     16,  22,  23,  24,  28,  32,  36,  40,
+     44,  48
+};
+
+#define TZS_COUNT  (sizeof(tzs_offsets) / sizeof(tzs_offsets[0]))
+
+static int tzs_index;  /* currently selected index during editing */
+
+void TimezoneSetting_Enter(void)
+{
+    tzs_index = (int)Settings_GetHomeTimezoneIndex();
+}
+
+void TimezoneSetting_OnScroll(int direction)
+{
+    tzs_index += direction;
+    if (tzs_index < 0) tzs_index = (int)TZS_COUNT - 1;
+    if (tzs_index >= (int)TZS_COUNT) tzs_index = 0;
+}
+
+bool TimezoneSetting_OnPress(void)
+{
+    /* Commit the selection */
+    Settings_SetHomeTimezoneIndex((uint8_t)tzs_index);
+    return true;  /* done editing, return to menu */
+}
+
+void TimezoneSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+    int8_t off_q = tzs_offsets[tzs_index];
+
+    /* Convert quarter-hours to hours:minutes */
+    int abs_q = (off_q < 0) ? -off_q : off_q;
+    int hours = abs_q / 4;
+    int mins  = (abs_q % 4) * 15;
+    char sign = (off_q < 0) ? '-' : '+';
+
+    if (mins != 0) {
+        sprintf(str, "%s %c%d:%02d", tzs_labels[tzs_index], sign, hours, mins);
+    } else {
+        sprintf(str, "%s %c%d", tzs_labels[tzs_index], sign, hours);
+    }
+
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
+}
+
+bool TimezoneSetting_NeedsRedraw(void)
+{
+    return false;
+}
+
+bool TimezoneSetting_IsOnOK(void)
+{
+    /* Instant confirm on press — same as brightness */
+    return true;
+}

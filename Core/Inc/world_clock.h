@@ -42,4 +42,12 @@ int WorldClock_GetEditingSlot(void);
 int WorldClock_GetTimezoneCount(void);
 int WorldClock_GetTimezoneIndex(int slot);
 
+/* ================= EEPROM PERSISTENCE ================= */
+/*
+ * Get/set the timezone table index for each display slot.
+ * Used by settings.c to save/restore from EEPROM.
+ */
+void WorldClock_SetSlotIndex(int slot, int tz_idx);
+int  WorldClock_GetSlotIndex(int slot);
+
 #endif // WORLD_CLOCK_H

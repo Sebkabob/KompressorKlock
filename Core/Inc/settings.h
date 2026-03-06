@@ -19,6 +19,7 @@ typedef enum {
     SETTING_BRIGHTNESS,
     SETTING_12_24HR,
     SETTING_TEMP_UNIT,
+    SETTING_TIMEZONE,
     SETTING_EXIT,
     SETTING_COUNT
 } SettingID_t;
@@ -48,16 +49,35 @@ void Settings_Set24Hour(bool enabled);
 bool Settings_IsCelsius(void);
 void Settings_SetCelsius(bool enabled);
 
+/* ================= HOME TIMEZONE ================= */
+
+/**
+ * @brief Get the home (device) timezone UTC offset in quarter-hours.
+ *        Used by world_clock.c to compute other zone times.
+ */
+int8_t Settings_GetHomeTimezoneOffsetQ(void);
+
+/**
+ * @brief Get the home timezone table index.
+ */
+uint8_t Settings_GetHomeTimezoneIndex(void);
+
+/**
+ * @brief Set the home timezone table index.
+ */
+void Settings_SetHomeTimezoneIndex(uint8_t idx);
+
 /* ================= EEPROM PERSISTENCE ================= */
 /*
- * Uses the RV-3032 User EEPROM (32 bytes at 0xCB–0xEA) to store
+ * Uses the RV-3032 User EEPROM (32 bytes at 0xCB-0xEA) to store
  * settings that survive full power cycles.
  *
  * Stored settings:
  *   - 12/24 hour mode
- *   - °C / °F temperature unit
+ *   - C / F temperature unit
  *   - Auto / manual brightness + manual percent
  *   - Last active screen index
+ *   - Home timezone index
  *
  * Call Settings_LoadFromEEPROM() once at startup AFTER SensorManager_Init,
  * Screen_Init, and all Screen_Register calls.
@@ -75,7 +95,7 @@ void Settings_LoadFromEEPROM(void);
 
 /**
  * @brief Save current settings to EEPROM (only changed bytes).
- *        Safe to call frequently — no-ops if nothing changed.
+ *        Safe to call frequently -- no-ops if nothing changed.
  */
 void Settings_SaveToEEPROM(void);
 

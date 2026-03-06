@@ -1,16 +1,12 @@
 #include "world_clock.h"
 #include "sensor_manager.h"
+#include "settings.h"
+#include "rtc_rv3032.h"
 #include "buzzer.h"
 #include "main.h"
 #include <stdbool.h>
 
 /* ================= TIMEZONE TABLE ================= */
-/*
- * UTC offsets stored in quarter-hours so we can represent
- * zones like UTC+5:30 (India) and UTC+5:45 (Nepal).
- *
- * Sorted roughly west-to-east for intuitive scrolling.
- */
 
 static const Timezone_t tz_table[] = {
     { "BKR",  -48 },  /* UTC-12:00  Baker Island          */
@@ -43,13 +39,142 @@ static const Timezone_t tz_table[] = {
 
 #define TZ_COUNT  (sizeof(tz_table) / sizeof(tz_table[0]))
 
+/* ================= DST SUPPORT ================= */
+
+typedef enum {
+    DST_NONE = 0,
+    DST_US,           /* 2nd Sun Mar - 1st Sun Nov */
+    DST_EU,           /* Last Sun Mar - Last Sun Oct */
+    DST_SOUTHERN      /* 1st Sun Oct - 1st Sun Apr (summer = Oct-Mar) */
+} DSTRule_t;
+
+static const DSTRule_t dst_rules[TZ_COUNT] = {
+    DST_NONE,      /* BKR */
+    DST_NONE,      /* SST */
+    DST_NONE,      /* HNL */
+    DST_US,        /* ANC */
+    DST_US,        /* LAX */
+    DST_US,        /* DEN */
+    DST_US,        /* CHI */
+    DST_US,        /* NYC */
+    DST_NONE,      /* CCS */
+    DST_NONE,      /* GRU */
+    DST_NONE,      /* GSI */
+    DST_NONE,      /* CVT */
+    DST_EU,        /* LON */
+    DST_EU,        /* PAR */
+    DST_NONE,      /* CAI */
+    DST_NONE,      /* MSK */
+    DST_NONE,      /* DXB */
+    DST_NONE,      /* DEL */
+    DST_NONE,      /* KTM */
+    DST_NONE,      /* DAC */
+    DST_NONE,      /* BKK */
+    DST_NONE,      /* SGP */
+    DST_NONE,      /* TKY */
+    DST_SOUTHERN,  /* SYD */
+    DST_NONE,      /* NOU */
+    DST_SOUTHERN,  /* AKL */
+};
+
+static int day_of_week(int y, int m, int d)
+{
+    static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    if (m < 3) y--;
+    return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
+}
+
+static int nth_weekday(int year, int month, int weekday, int n)
+{
+    int dow_1st = day_of_week(year, month, 1);
+    int first = 1 + ((weekday - dow_1st + 7) % 7);
+    return first + (n - 1) * 7;
+}
+
+static int last_weekday(int year, int month, int weekday)
+{
+    static const uint8_t dim[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+    int mdays = dim[month];
+    if (month == 2) {
+        bool leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+        if (leap) mdays = 29;
+    }
+
+    int dow_last = day_of_week(year, month, mdays);
+    int diff = (dow_last - weekday + 7) % 7;
+    return mdays - diff;
+}
+
+static bool date_on_or_after(int month, int day, int ref_month, int ref_day)
+{
+    if (month > ref_month) return true;
+    if (month == ref_month && day >= ref_day) return true;
+    return false;
+}
+
+static bool date_before(int month, int day, int ref_month, int ref_day)
+{
+    return !date_on_or_after(month, day, ref_month, ref_day);
+}
+
+static int8_t get_dst_offset_q(int tz_idx)
+{
+    DSTRule_t rule = dst_rules[tz_idx];
+    if (rule == DST_NONE) return 0;
+
+    uint8_t month = RV3032_GetMonth();
+    uint8_t mday  = RV3032_GetDate();
+    uint16_t year = RV3032_GetYear();
+
+    int m = (int)month;
+    int d = (int)mday;
+    int y = (int)year;
+
+    switch (rule) {
+        case DST_US: {
+            int start_day = nth_weekday(y, 3, 0, 2);
+            int end_day   = nth_weekday(y, 11, 0, 1);
+
+            if (date_on_or_after(m, d, 3, start_day) &&
+                date_before(m, d, 11, end_day)) {
+                return 4;
+            }
+            return 0;
+        }
+
+        case DST_EU: {
+            int start_day = last_weekday(y, 3, 0);
+            int end_day   = last_weekday(y, 10, 0);
+
+            if (date_on_or_after(m, d, 3, start_day) &&
+                date_before(m, d, 10, end_day)) {
+                return 4;
+            }
+            return 0;
+        }
+
+        case DST_SOUTHERN: {
+            int start_day = nth_weekday(y, 10, 0, 1);
+            int end_day   = nth_weekday(y, 4, 0, 1);
+
+            if (date_on_or_after(m, d, 10, start_day) ||
+                date_before(m, d, 4, end_day)) {
+                return 4;
+            }
+            return 0;
+        }
+
+        default:
+            return 0;
+    }
+}
+
 /* ================= STATE ================= */
 
 static WorldClockState_t wc_state = WC_STATE_DISPLAY;
-static int tz_index[2] = { 7, 12 };  /* Default: NYC (idx 7), LON (idx 12) */
+static int tz_index[2] = { 4, 22 };  /* Default: NYC (idx 7), LON (idx 12) */
 static bool wc_dirty = true;
 
-/* Blink for editing */
 static uint32_t wc_blink_tick = 0;
 static bool     wc_blink_on  = true;
 #define WC_BLINK_MS  500
@@ -67,7 +192,6 @@ void WorldClock_Init(void)
 void WorldClock_OnLongPress(void)
 {
     if (wc_state == WC_STATE_DISPLAY) {
-        /* Enter editing: start with TZ1 */
         wc_state = WC_STATE_EDITING_TZ1;
         wc_blink_on = true;
         wc_blink_tick = HAL_GetTick();
@@ -79,17 +203,19 @@ void WorldClock_OnLongPress(void)
 void WorldClock_OnPress(void)
 {
     if (wc_state == WC_STATE_EDITING_TZ1) {
-        /* Advance to editing TZ2 */
         wc_state = WC_STATE_EDITING_TZ2;
         wc_blink_on = true;
         wc_blink_tick = HAL_GetTick();
         wc_dirty = true;
         Buzzer_BeepShort();
     } else if (wc_state == WC_STATE_EDITING_TZ2) {
-        /* Done editing */
+        /* Done editing — persist to EEPROM */
         wc_state = WC_STATE_DISPLAY;
         wc_dirty = true;
         Buzzer_BeepDouble();
+
+        Settings_MarkEEPROMDirty();
+        Settings_SaveToEEPROM();
     }
 }
 
@@ -144,55 +270,21 @@ void WorldClock_GetTime(int slot, uint8_t *hours, uint8_t *minutes)
     if (slot < 0 || slot > 1) { *hours = 0; *minutes = 0; return; }
 
     const SensorData_t *data = SensorManager_GetData();
-
-    /* Get local time in total minutes since midnight */
     int32_t local_mins = (int32_t)data->hours_24 * 60 + (int32_t)data->minutes;
 
-    /*
-     * We need the user's local UTC offset to compute other zones.
-     * Since we don't store it, we assume the device's RTC is set to
-     * the user's local time. We'll use a reference offset that the
-     * user can mentally calibrate by choosing their own city as one
-     * of the two zones.
-     *
-     * The device time IS local time. To get another timezone:
-     *   other_time = local_time + (other_offset - local_offset)
-     *
-     * We store a "device timezone" that defaults to NYC (-20 quarters = UTC-5).
-     * The user sets their own zone as TZ1 or TZ2, matching their RTC.
-     *
-     * For simplicity: we compute relative to UTC using a fixed device offset.
-     * The user should set one slot to their own city to keep it meaningful.
-     *
-     * Actually, the cleanest approach: store a device_tz_index and let
-     * the user set it. But to keep it simple and match the spec,
-     * we'll just compute the difference between the two selected zones
-     * and the device's assumed UTC offset.
-     *
-     * Let's use a simpler model: device_tz is always slot 0's timezone
-     * when first initialized (NYC). The user's RTC matches their local time.
-     * We'll store a device offset that we can derive.
-     *
-     * SIMPLEST: assume device RTC = UTC. User picks two cities, we apply
-     * their UTC offsets directly. This is actually the most flexible -
-     * the user just needs to set their RTC to UTC, OR they pick their
-     * own city as a reference and the other city will be correct relative
-     * to it.
-     *
-     * Let's go with: device time = local time, and we need a "home" offset.
-     * We'll default home to NYC (UTC-5) and store it. The world clock
-     * computes: tz_time = local_time + (tz_offset - home_offset)
-     */
+    /* Home timezone from settings (standard offset + DST) */
+    int8_t home_offset_q = Settings_GetHomeTimezoneOffsetQ();
+    uint8_t home_idx = Settings_GetHomeTimezoneIndex();
+    int8_t home_dst = get_dst_offset_q((int)home_idx);
+    int32_t home_total_q = (int32_t)home_offset_q + (int32_t)home_dst;
 
-    /* Home offset: use a static. Could be made configurable later. */
-    static int8_t home_offset_quarters = -20; /* NYC = UTC-5 */
+    /* Target timezone (standard offset + DST) */
+    int8_t tz_offset_q = tz_table[tz_index[slot]].utc_offset_quarters;
+    int8_t tz_dst = get_dst_offset_q(tz_index[slot]);
+    int32_t tz_total_q = (int32_t)tz_offset_q + (int32_t)tz_dst;
 
-    int8_t tz_offset = tz_table[tz_index[slot]].utc_offset_quarters;
-
-    /* Difference in quarter-hours */
-    int32_t diff_quarters = (int32_t)tz_offset - (int32_t)home_offset_quarters;
-    int32_t diff_mins = diff_quarters * 15;
-
+    /* Difference in quarter-hours between target and home */
+    int32_t diff_mins = ((int32_t)tz_total_q - home_total_q) * 15;
     int32_t tz_mins = local_mins + diff_mins;
 
     /* Wrap to 0-1439 */
@@ -221,6 +313,21 @@ int WorldClock_GetTimezoneCount(void)
 }
 
 int WorldClock_GetTimezoneIndex(int slot)
+{
+    if (slot < 0 || slot > 1) return 0;
+    return tz_index[slot];
+}
+
+/* ================= EEPROM SLOT ACCESSORS ================= */
+
+void WorldClock_SetSlotIndex(int slot, int tz_idx)
+{
+    if (slot < 0 || slot > 1) return;
+    if (tz_idx < 0 || tz_idx >= (int)TZ_COUNT) return;
+    tz_index[slot] = tz_idx;
+}
+
+int WorldClock_GetSlotIndex(int slot)
 {
     if (slot < 0 || slot > 1) return 0;
     return tz_index[slot];
