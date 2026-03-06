@@ -2,7 +2,6 @@
 #include "sensor_manager.h"
 #include "settings.h"
 #include "rtc_rv3032.h"
-#include "ltr_329.h"
 #include "timer_app.h"
 #include "main.h"
 #include "world_clock.h"
@@ -21,21 +20,11 @@ static int get_display_temp(const SensorData_t *data)
     return Settings_IsCelsius() ? data->temp_c : data->temp_f;
 }
 
-static char get_temp_unit_char(void)
-{
-    return Settings_IsCelsius() ? 'C' : 'F';
-}
-
 /* ================= EXISTING SCREEN IMPLEMENTATIONS ================= */
 
 void Screen_Logo(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     Matrix_DrawBitmap_Buf(buf, kompressor_logo);
-}
-
-void Screen_Logo2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    Matrix_DrawBitmap_Buf(buf, buy_a_wd);
 }
 
 void Screen_Time(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -77,13 +66,30 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawTextRight_Buf(buf, 0, date_str);
 }
 
+/* ================= BATTERY SCREEN TOGGLE STATE ================= */
+
+static bool battery_show_alt = false;
+
+void Screen_Battery_Toggle(void)
+{
+    battery_show_alt = !battery_show_alt;
+}
+
+bool Screen_Battery_IsAlt(void)
+{
+    return battery_show_alt;
+}
+
+/* ================= BATTERY SCREEN (NORMAL) ================= */
+
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
+    if (battery_show_alt) {
+        Screen_BatteryAlt(buf);
+        return;
+    }
+
     const SensorData_t *data = SensorManager_GetData();
-
-    #define ICON_W   15
-    #define ICON_GAP  2
-
     uint8_t soc = (uint8_t)data->soc_percent;
     bool charging = (data->current_mA >= 0);
 
@@ -94,47 +100,82 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     }
 
     uint8_t blink_bar = 0xFF;
-    if (charging && filled_bars < 10) {
-        bool blink_on = ((HAL_GetTick() / 500) % 2) == 0;
-        if (blink_on) {
-            blink_bar = filled_bars;
-        }
-    }
+    if (charging && filled_bars < 10 && ((HAL_GetTick() / 500) % 2) == 0)
+        blink_bar = filled_bars;
+
+    char soc_str[8];
+    sprintf(soc_str, "%d%%", soc);
+    int soc_w = Matrix_TextPixelWidth(soc_str);
+
+    #define ICON_W   15
+    #define ICON_GAP  2
+
+    int total_w = ICON_W + ICON_GAP + soc_w;
+    if (charging) total_w += ICON_GAP + 6; /* bolt is ~6px wide */
+    int start = (NUM_COLS - total_w) / 2;
+    int text_x = start + ICON_W + ICON_GAP;
+
+    if (charging)
+        Matrix_DrawBatteryIcon_Blink_Buf(buf, start, soc, blink_bar);
+    else
+        Matrix_DrawBatteryIcon_Buf(buf, start, soc);
+
+    Matrix_DrawText_Buf(buf, 0, text_x, soc_str);
 
     if (charging) {
-        char str[4] = { '\x02', '\0' };
-        int total_w = ICON_W + ICON_GAP + Matrix_TextPixelWidth(str);
-        int start = (NUM_COLS - total_w) / 2;
-
-        Matrix_DrawBatteryIcon_Blink_Buf(buf, start, soc, blink_bar);
-        Matrix_DrawText_Buf(buf, 0, start + ICON_W + ICON_GAP, str);
-    } else {
-        char str[16];
-        int days = (soc * 12 + 50) / 100;
-        sprintf(str, "%dd left", days);
-
-        int total_w = ICON_W + ICON_GAP + Matrix_TextPixelWidth(str);
-        int start = (NUM_COLS - total_w) / 2;
-
-        Matrix_DrawBatteryIcon_Buf(buf, start, soc);
-        Matrix_DrawText_Buf(buf, 0, start + ICON_W + ICON_GAP, str);
+        char bolt[2] = { '\x02', '\0' };
+        Matrix_DrawText_Buf(buf, 0, text_x + soc_w + ICON_GAP, bolt);
     }
 }
 
-void Screen_Battery2(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    const SensorData_t *data = SensorManager_GetData();
-    char str[32];
-    sprintf(str, "%3dmA %4dmV %2d%%", data->current_mA, data->voltage_mV, data->soc_percent);
-    Matrix_DrawText_Buf(buf, 0, 0, str);
-}
+/* ================= BATTERY SCREEN (ALTERNATE — FULL-WIDTH BAR) ================= */
+/*
+ * Uses all 84 columns as a fill bar. Fill width = round(soc * 84 / 100).
+ * All 7 rows are filled for the bar portion.
+ *
+ * SOC% text is left-justified, bolt icon is right-justified (if charging).
+ * Where text overlaps the bar, pixels are XOR'd (inverted), so text is
+ * always readable against either filled or empty background.
+ */
 
-void Screen_TempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+void Screen_BatteryAlt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     const SensorData_t *data = SensorManager_GetData();
-    char str[32];
-    sprintf(str, "  %2d%c   %2d\x01%%", get_display_temp(data), get_temp_unit_char(), data->humidity);
-    Matrix_DrawText_Buf(buf, 0, 0, str);
+    uint8_t soc = (uint8_t)data->soc_percent;
+    bool charging = (data->current_mA >= 0);
+
+    /* Calculate fill width */
+    int fill_cols = (int)(((uint32_t)soc * NUM_COLS + 50) / 100);
+    if (fill_cols > NUM_COLS) fill_cols = NUM_COLS;
+
+    /* If charging, animate: blink the next column */
+    if (charging && fill_cols < NUM_COLS) {
+        if (((HAL_GetTick() / 500) % 2) == 0) fill_cols++;
+    }
+
+    /* Draw text into the (currently empty) buffer first */
+    char soc_str[8];
+    sprintf(soc_str, "%d%%", soc);
+    Matrix_DrawText_Buf(buf, 0, 1, soc_str);
+
+    if (charging) {
+        char bolt[2] = { '\x02', '\0' };
+        int bw = Matrix_TextPixelWidth(bolt);
+        Matrix_DrawText_Buf(buf, 0, NUM_COLS - bw - 1, bolt);
+    }
+
+    /* XOR the fill bar on top — text in filled area gets inverted,
+       text in empty area stays normal, empty filled area becomes solid */
+    int full_bytes = fill_cols / 8;
+    int rem_bits = fill_cols % 8;
+    uint8_t rem_mask = (uint8_t)((1u << rem_bits) - 1);
+
+    for (int r = 0; r < NUM_ROWS; r++) {
+        for (int b = 0; b < full_bytes && b < TOTAL_BYTES; b++)
+            buf[r][b] ^= 0xFF;
+        if (rem_bits > 0 && full_bytes < TOTAL_BYTES)
+            buf[r][full_bytes] ^= rem_mask;
+    }
 }
 
 void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -147,59 +188,6 @@ void Screen_TimeTempHumid(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     sprintf(str2, "%2d\x03 %2d\x01", get_display_temp(data), data->humidity);
     Matrix_DrawTextRight_Buf(buf, 0, str2);
-}
-
-void Screen_TimeLight(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    const SensorData_t *data = SensorManager_GetData();
-    char str1[32], str2[32];
-
-    sprintf(str1, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
-    Matrix_DrawText_Buf(buf, 0, 0, str1);
-
-    sprintf(str2, "%2d%%", data->light_percent);
-    Matrix_DrawTextRight_Buf(buf, 0, str2);
-}
-
-void Screen_TimeTempBatt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    const SensorData_t *data = SensorManager_GetData();
-    char str1[32], str2[32];
-
-    sprintf(str1, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
-    Matrix_DrawText_Buf(buf, 0, 0, str1);
-
-    sprintf(str2, "%2d\x03 %2d%%", get_display_temp(data), data->soc_percent);
-    Matrix_DrawTextRight_Buf(buf, 0, str2);
-}
-
-void Screen_LightDebug(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    static uint32_t last_page_switch = 0;
-    static uint8_t page = 0;
-    char str[48];
-
-    uint32_t now = HAL_GetTick();
-    if (now - last_page_switch >= 2000) {
-        page = (page + 1) % 2;
-        last_page_switch = now;
-    }
-
-    if (page == 0) {
-        uint8_t raw = LTR_329_GetLightPercentRaw();
-        uint8_t filtered = LTR_329_GetLightPercent();
-        uint8_t mapped = SensorManager_GetMappedBrightness();
-        uint8_t actual = SensorManager_GetCurrentBrightness();
-        sprintf(str, "%02d %02d", raw, filtered);
-        Matrix_DrawText_Buf(buf, 0, 0, str);
-        sprintf(str, "%03d %03d", mapped, actual);
-        Matrix_DrawTextRight_Buf(buf, 0, str);
-    } else {
-        uint16_t ch0 = LTR_329_GetChannel0();
-        uint16_t ch1 = LTR_329_GetChannel1();
-        sprintf(str, "%05u %05u", ch0, ch1);
-        Matrix_DrawTextCentered_Buf(buf, 0, str);
-    }
 }
 
 /* =====================================================================
@@ -325,87 +313,7 @@ void Screen_TimeDateCompact(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 }
 
 /* =====================================================================
- *  FUZZY TIME
- * =====================================================================*/
-
-void Screen_FuzzyTime(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
-{
-    static int scroll_offset = 0;
-    static uint32_t scroll_tick = 0;
-    static char last_phrase[48] = "";
-
-    const SensorData_t *data = SensorManager_GetData();
-    uint8_t h12 = data->hours_12;
-    uint8_t m   = data->minutes;
-
-    static const char * const hour_names[] = {
-        "", "one", "two", "three", "four", "five",
-        "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve"
-    };
-
-    char phrase[48];
-
-    if (data->hours_24 == 0 && m < 3) {
-        sprintf(phrase, "midnight");
-    } else if (data->hours_24 == 12 && m < 3) {
-        sprintf(phrase, "noon");
-    } else if (m < 3) {
-        sprintf(phrase, "%s o'clock", hour_names[h12]);
-    } else if (m < 8) {
-        sprintf(phrase, "just after %s", hour_names[h12]);
-    } else if (m < 13) {
-        sprintf(phrase, "ten past %s", hour_names[h12]);
-    } else if (m < 18) {
-        sprintf(phrase, "quarter past %s", hour_names[h12]);
-    } else if (m < 23) {
-        sprintf(phrase, "twenty past %s", hour_names[h12]);
-    } else if (m < 28) {
-        sprintf(phrase, "almost half past %s", hour_names[h12]);
-    } else if (m < 33) {
-        sprintf(phrase, "half past %s", hour_names[h12]);
-    } else if (m < 38) {
-        uint8_t next_h = (h12 % 12) + 1;
-        sprintf(phrase, "twenty five to %s", hour_names[next_h]);
-    } else if (m < 43) {
-        uint8_t next_h = (h12 % 12) + 1;
-        sprintf(phrase, "twenty to %s", hour_names[next_h]);
-    } else if (m < 48) {
-        uint8_t next_h = (h12 % 12) + 1;
-        sprintf(phrase, "quarter to %s", hour_names[next_h]);
-    } else if (m < 53) {
-        uint8_t next_h = (h12 % 12) + 1;
-        sprintf(phrase, "ten to %s", hour_names[next_h]);
-    } else {
-        uint8_t next_h = (h12 % 12) + 1;
-        sprintf(phrase, "almost %s", hour_names[next_h]);
-    }
-
-    if (strcmp(phrase, last_phrase) != 0) {
-        strcpy(last_phrase, phrase);
-        scroll_offset = 0;
-        scroll_tick = HAL_GetTick();
-    }
-
-    int text_w = Matrix_TextPixelWidth(phrase);
-    if (text_w <= NUM_COLS) {
-        Matrix_DrawTextCentered_Buf(buf, 0, phrase);
-    } else {
-        Matrix_ScrollText_Buf(buf, 0, phrase, &scroll_offset, 80, &scroll_tick);
-    }
-}
-
-/* =====================================================================
  *  WORLD CLOCK — uses tiny 3x5 font for city labels
- *
- *  Layout (84 columns):
- *    [tiny_label0] [space] [HH:MM]  gap  [tiny_label1] [space] [HH:MM]
- *
- *  Tiny label: 3 chars × 4px = 11px.  Time: 5 chars × 6px = 29px.
- *  One zone block = 11 + 1 + 29 = 41px.  Two blocks + 2px gap = 84px.
- *
- *  The tiny label is drawn at row 1 (vertically centered in 7 rows
- *  for a 5-row-tall glyph). The normal time is drawn at row 0.
  * =====================================================================*/
 
 void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -422,14 +330,12 @@ void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     bool blink_on = WorldClock_IsBlinkOn();
 
     /* --- Left timezone --- */
-    /* Tiny label at col 0, row 1 */
     if (state == WC_STATE_EDITING_TZ1 && !blink_on) {
         Matrix_DrawTinyText_Buf(buf, 1, 0, "___");
     } else {
         Matrix_DrawTinyText_Buf(buf, 1, 0, label0);
     }
 
-    /* Normal-font time right after the label */
     {
         char t0[8];
         sprintf(t0, "%02d:%02d", h0, m0);
@@ -437,7 +343,6 @@ void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     }
 
     /* --- Right timezone --- */
-    /* Mirror layout from right side: time ends at col 83, label before it */
     {
         char t1[8];
         sprintf(t1, "%02d:%02d", h1, m1);
@@ -445,7 +350,6 @@ void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         int time_x = NUM_COLS - time_w;
         Matrix_DrawText_Buf(buf, 0, time_x, t1);
 
-        /* Tiny label just to the left of the time, with 1px gap */
         int label_x = time_x - Matrix_TinyTextPixelWidth(label1) - 2;
         if (state == WC_STATE_EDITING_TZ2 && !blink_on) {
             Matrix_DrawTinyText_Buf(buf, 1, label_x, "___");
@@ -554,12 +458,7 @@ void Screen_BigDigit(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 }
 
 /* =====================================================================
- *  PIXEL RAIN — slower and sparser
- *
- *  Changes from original:
- *  - Speed range 2-5 (was 1-3) — everything falls slower
- *  - Only ~1 in 3 columns are active at a time (rest are dormant)
- *  - Longer pause before columns respawn after falling off
+ *  PIXEL RAIN
  * =====================================================================*/
 
 #define RAIN_COLS  NUM_COLS
@@ -569,7 +468,7 @@ typedef struct {
     uint8_t speed;
     uint8_t tick_count;
     uint8_t tail_len;
-    uint8_t active;      /* 0 = dormant (invisible), 1 = falling */
+    uint8_t active;
 } RainColumn_t;
 
 static RainColumn_t rain[RAIN_COLS];
@@ -587,15 +486,14 @@ static uint8_t rain_rand(void)
 
 static void rain_reset_column(int c)
 {
-    /* ~1 in 3 chance of being active; rest stay dormant longer */
     if ((rain_rand() % 3) == 0) {
         rain[c].active = 1;
         rain[c].head_row = -(int8_t)(rain_rand() % 12);
-        rain[c].speed = 2 + (rain_rand() % 4);      /* 2-5 (slower) */
-        rain[c].tail_len = 2 + (rain_rand() % 3);    /* 2-4 (shorter) */
+        rain[c].speed = 2 + (rain_rand() % 4);
+        rain[c].tail_len = 2 + (rain_rand() % 3);
     } else {
         rain[c].active = 0;
-        rain[c].head_row = -(int8_t)(10 + (rain_rand() % 20)); /* long delay */
+        rain[c].head_row = -(int8_t)(10 + (rain_rand() % 20));
         rain[c].speed = 3;
         rain[c].tail_len = 0;
     }
@@ -608,13 +506,11 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         rain_rng ^= (uint16_t)HAL_GetTick();
         for (int c = 0; c < RAIN_COLS; c++) {
             rain_reset_column(c);
-            /* Extra stagger on init */
             rain[c].head_row -= (int8_t)(rain_rand() % 10);
         }
         rain_inited = true;
     }
 
-    /* Advance columns */
     for (int c = 0; c < RAIN_COLS; c++) {
         rain[c].tick_count++;
         if (rain[c].tick_count >= rain[c].speed) {
@@ -626,7 +522,6 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
                     rain_reset_column(c);
                 }
             } else {
-                /* Dormant column: once head_row reaches 0, give it a chance */
                 if (rain[c].head_row >= 0) {
                     rain_reset_column(c);
                 }
@@ -634,7 +529,6 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Draw active rain drops */
     for (int c = 0; c < RAIN_COLS; c++) {
         if (!rain[c].active) continue;
         int head = rain[c].head_row;
@@ -647,7 +541,6 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Overlay time text */
     const SensorData_t *data = SensorManager_GetData();
     char time_str[16];
     sprintf(time_str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
@@ -655,7 +548,6 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     int text_w = Matrix_TextPixelWidth(time_str);
     int text_x = (NUM_COLS - text_w) / 2;
 
-    /* Clear band behind text */
     for (int r = 0; r < NUM_ROWS; r++) {
         for (int c = text_x - 2; c < text_x + text_w + 2; c++) {
             if (c >= 0 && c < NUM_COLS) {

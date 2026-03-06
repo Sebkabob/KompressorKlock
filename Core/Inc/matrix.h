@@ -9,7 +9,6 @@
 #define TOTAL_BYTES 11
 
 extern const uint8_t kompressor_logo[NUM_ROWS][TOTAL_BYTES];
-extern const uint8_t buy_a_wd[NUM_ROWS][TOTAL_BYTES];
 
 void Matrix_Init(void);
 void Matrix_Task(void);

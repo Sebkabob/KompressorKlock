@@ -16,6 +16,7 @@ void Rotary_EXTI_Handler(void);
 void Rotary_SetStopwatchScreenIndex(int idx);
 void Rotary_SetCountdownScreenIndex(int idx);
 void Rotary_SetWorldClockScreenIndex(int idx);
+void Rotary_SetBatteryScreenIndex(int idx);
 
 /* ================= PRESS INDICATOR BAR ================= */
 

@@ -197,11 +197,11 @@ int main(void)
   Screen_Register(Screen_TimeDate);
   Screen_Register(Screen_TimeDateCompact);
   Screen_Register(Screen_TimeTempHumid);
-//  Screen_Register(Screen_FuzzyTime);
   bigdigit_screen_index = Screen_Register(Screen_BigDigit);
 
   /* ---- UTILITY SCREENS ---- */
   battery_screen_index = Screen_Register(Screen_Battery);
+  Rotary_SetBatteryScreenIndex(battery_screen_index);
 
   worldclock_screen_index = Screen_Register(Screen_WorldClock);
   Rotary_SetWorldClockScreenIndex(worldclock_screen_index);
@@ -289,6 +289,10 @@ int main(void)
 	    if (battery_screen_index >= 0 && Screen_GetCurrent() == battery_screen_index) {
 	        const SensorData_t *batt_data = SensorManager_GetData();
 	        if (batt_data->current_mA >= 0) {
+	            Screen_MarkDirty();
+	        }
+	        /* Alt battery view also animates when charging */
+	        if (Screen_Battery_IsAlt() && batt_data->current_mA >= 0) {
 	            Screen_MarkDirty();
 	        }
 	    }

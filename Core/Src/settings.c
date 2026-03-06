@@ -25,13 +25,6 @@ static const int8_t tz_offsets[] = {
      44,  48                                   /* NOU, AKL */
 };
 
-static const char * const tz_labels[] = {
-    "BKR", "SST", "HNL", "ANC", "LAX", "DEN", "CHI", "NYC",
-    "CCS", "GRU", "GSI", "CVT", "LON", "PAR", "CAI", "MSK",
-    "DXB", "DEL", "KTM", "DAC", "BKK", "SGP", "TKY", "SYD",
-    "NOU", "AKL"
-};
-
 #define TZ_TABLE_SIZE  (sizeof(tz_offsets) / sizeof(tz_offsets[0]))
 
 /* ================= STATE ================= */

@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "timer_app.h"
 #include "world_clock.h"
+#include "screen_impl.h"
 
 static const int8_t encoder_lut[16] = {
       0,     1,    -1,     0,
@@ -23,10 +24,12 @@ static const int8_t encoder_lut[16] = {
 static int stopwatch_screen_index  = -1;
 static int countdown_screen_index  = -1;
 static int worldclock_screen_index = -1;
+static int battery_screen_index    = -1;
 
 void Rotary_SetStopwatchScreenIndex(int idx)  { stopwatch_screen_index = idx; }
 void Rotary_SetCountdownScreenIndex(int idx)  { countdown_screen_index = idx; }
 void Rotary_SetWorldClockScreenIndex(int idx) { worldclock_screen_index = idx; }
+void Rotary_SetBatteryScreenIndex(int idx)    { battery_screen_index = idx; }
 
 static bool on_stopwatch_screen(void)
 {
@@ -41,6 +44,11 @@ static bool on_countdown_screen(void)
 static bool on_worldclock_screen(void)
 {
     return (Screen_GetCurrent() == worldclock_screen_index && worldclock_screen_index >= 0);
+}
+
+static bool on_battery_screen(void)
+{
+    return (Screen_GetCurrent() == battery_screen_index && battery_screen_index >= 0);
 }
 
 static bool on_timer_screen(void)
@@ -265,6 +273,10 @@ void Rotary_Update(void)
                     if (was_held && !sw_hold_consumed) {
                         if (in_settings) {
                             Settings_OnPress();
+                            Screen_MarkDirty();
+                        } else if (on_battery_screen()) {
+                            /* Toggle between normal and alt battery view */
+                            Screen_Battery_Toggle();
                             Screen_MarkDirty();
                         } else if (on_stopwatch_screen()) {
                             Stopwatch_OnPress();
