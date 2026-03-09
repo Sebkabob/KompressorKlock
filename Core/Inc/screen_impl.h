@@ -25,6 +25,11 @@ void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_BigDigit(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
+void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
 /* ================= BATTERY SCREEN TOGGLE ================= */
 
 void Screen_Battery_Toggle(void);

@@ -55,6 +55,10 @@ static int battery_screen_index = -1;
 static int worldclock_screen_index = -1;
 static int pixelrain_screen_index = -1;
 static int bigdigit_screen_index = -1;
+static int conway_screen_index = -1;
+static int snake_screen_index = -1;
+static int typewriter_screen_index = -1;
+static int pongclock_screen_index = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -198,6 +202,13 @@ int main(void)
   Screen_Register(Screen_TimeDateCompact);
   Screen_Register(Screen_TimeTempHumid);
   bigdigit_screen_index = Screen_Register(Screen_BigDigit);
+  typewriter_screen_index = Screen_Register(Screen_Typewriter);
+  pongclock_screen_index = Screen_Register(Screen_PongClock);
+
+  /* ---- ANIMATED SCREENS ---- */
+  pixelrain_screen_index = Screen_Register(Screen_PixelRain);
+  conway_screen_index = Screen_Register(Screen_Conway);
+  snake_screen_index = Screen_Register(Screen_Snake);
 
   /* ---- UTILITY SCREENS ---- */
   battery_screen_index = Screen_Register(Screen_Battery);
@@ -206,8 +217,6 @@ int main(void)
   worldclock_screen_index = Screen_Register(Screen_WorldClock);
   Rotary_SetWorldClockScreenIndex(worldclock_screen_index);
   WorldClock_Init();
-
-  pixelrain_screen_index = Screen_Register(Screen_PixelRain);
 
   stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
   countdown_screen_index = Screen_Register(Screen_Countdown);
@@ -279,11 +288,16 @@ int main(void)
 	    }
 
 	    /* Continuously animated screens */
-	    if (Screen_GetCurrent() == pixelrain_screen_index) {
-	        Screen_MarkDirty();
-	    }
-	    if (Screen_GetCurrent() == bigdigit_screen_index) {
-	        Screen_MarkDirty();
+	    {
+	        int cur = Screen_GetCurrent();
+	        if (cur == pixelrain_screen_index ||
+	            cur == bigdigit_screen_index ||
+	            cur == conway_screen_index ||
+	            cur == snake_screen_index ||
+	            cur == typewriter_screen_index ||
+	            cur == pongclock_screen_index) {
+	            Screen_MarkDirty();
+	        }
 	    }
 
 	    if (battery_screen_index >= 0 && Screen_GetCurrent() == battery_screen_index) {

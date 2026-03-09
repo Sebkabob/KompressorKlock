@@ -111,7 +111,7 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     #define ICON_GAP  2
 
     int total_w = ICON_W + ICON_GAP + soc_w;
-    if (charging) total_w += ICON_GAP + 6; /* bolt is ~6px wide */
+    if (charging) total_w += ICON_GAP + 6;
     int start = (NUM_COLS - total_w) / 2;
     int text_x = start + ICON_W + ICON_GAP;
 
@@ -129,14 +129,6 @@ void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 }
 
 /* ================= BATTERY SCREEN (ALTERNATE — FULL-WIDTH BAR) ================= */
-/*
- * Uses all 84 columns as a fill bar. Fill width = round(soc * 84 / 100).
- * All 7 rows are filled for the bar portion.
- *
- * SOC% text is left-justified, bolt icon is right-justified (if charging).
- * Where text overlaps the bar, pixels are XOR'd (inverted), so text is
- * always readable against either filled or empty background.
- */
 
 void Screen_BatteryAlt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
@@ -144,16 +136,13 @@ void Screen_BatteryAlt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     uint8_t soc = (uint8_t)data->soc_percent;
     bool charging = (data->current_mA >= 0);
 
-    /* Calculate fill width */
     int fill_cols = (int)(((uint32_t)soc * NUM_COLS + 50) / 100);
     if (fill_cols > NUM_COLS) fill_cols = NUM_COLS;
 
-    /* If charging, animate: blink the next column */
     if (charging && fill_cols < NUM_COLS) {
         if (((HAL_GetTick() / 500) % 2) == 0) fill_cols++;
     }
 
-    /* Draw text into the (currently empty) buffer first */
     char soc_str[8];
     sprintf(soc_str, "%d%%", soc);
     Matrix_DrawText_Buf(buf, 0, 1, soc_str);
@@ -164,8 +153,6 @@ void Screen_BatteryAlt(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         Matrix_DrawText_Buf(buf, 0, NUM_COLS - bw - 1, bolt);
     }
 
-    /* XOR the fill bar on top — text in filled area gets inverted,
-       text in empty area stays normal, empty filled area becomes solid */
     int full_bytes = fill_cols / 8;
     int rem_bits = fill_cols % 8;
     uint8_t rem_mask = (uint8_t)((1u << rem_bits) - 1);
@@ -329,7 +316,6 @@ void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     bool blink_on = WorldClock_IsBlinkOn();
 
-    /* --- Left timezone --- */
     if (state == WC_STATE_EDITING_TZ1 && !blink_on) {
         Matrix_DrawTinyText_Buf(buf, 1, 0, "___");
     } else {
@@ -342,7 +328,6 @@ void Screen_WorldClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         Matrix_DrawText_Buf(buf, 0, 13, t0);
     }
 
-    /* --- Right timezone --- */
     {
         char t1[8];
         sprintf(t1, "%02d:%02d", h1, m1);
@@ -557,4 +542,789 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     }
 
     Matrix_DrawText_Buf(buf, 0, text_x, time_str);
+}
+
+/* =====================================================================
+ *  CONWAY'S GAME OF LIFE
+ *
+ *  Full 7x84 grid. Evolves every ~150ms. Time is overlaid in the
+ *  center with a 2px cleared border. The simulation reseeds
+ *  automatically if it stagnates (identical to previous generation)
+ *  or if the population drops too low.
+ * =====================================================================*/
+
+#define GOL_ROWS  NUM_ROWS
+#define GOL_COLS  NUM_COLS
+
+static uint8_t gol_grid[GOL_ROWS][TOTAL_BYTES];
+static uint8_t gol_prev[GOL_ROWS][TOTAL_BYTES];
+static bool    gol_inited = false;
+static uint32_t gol_last_tick = 0;
+static uint16_t gol_rng = 0xCAFE;
+static uint8_t  gol_stale_count = 0;
+
+#define GOL_STEP_MS       150
+#define GOL_STALE_LIMIT   3
+
+static uint8_t gol_rand8(void)
+{
+    gol_rng ^= gol_rng << 7;
+    gol_rng ^= gol_rng >> 9;
+    gol_rng ^= gol_rng << 8;
+    return (uint8_t)(gol_rng & 0xFF);
+}
+
+static inline uint8_t gol_get(const uint8_t grid[][TOTAL_BYTES], int r, int c)
+{
+    /* Toroidal wrap */
+    if (r < 0) r += GOL_ROWS;
+    if (r >= GOL_ROWS) r -= GOL_ROWS;
+    if (c < 0) c += GOL_COLS;
+    if (c >= GOL_COLS) c -= GOL_COLS;
+    return (grid[r][c / 8] >> (c % 8)) & 1;
+}
+
+static inline void gol_set(uint8_t grid[][TOTAL_BYTES], int r, int c, uint8_t v)
+{
+    if (v)
+        grid[r][c / 8] |= (1 << (c % 8));
+    else
+        grid[r][c / 8] &= ~(1 << (c % 8));
+}
+
+static void gol_seed(void)
+{
+    gol_rng ^= (uint16_t)HAL_GetTick();
+    memset(gol_grid, 0, sizeof(gol_grid));
+    for (int r = 0; r < GOL_ROWS; r++) {
+        for (int c = 0; c < GOL_COLS; c++) {
+            if ((gol_rand8() % 4) == 0) {  /* ~25% density */
+                gol_set(gol_grid, r, c, 1);
+            }
+        }
+    }
+    memset(gol_prev, 0, sizeof(gol_prev));
+    gol_stale_count = 0;
+}
+
+static int gol_population(void)
+{
+    int count = 0;
+    for (int r = 0; r < GOL_ROWS; r++) {
+        for (int b = 0; b < TOTAL_BYTES; b++) {
+            uint8_t v = gol_grid[r][b];
+            while (v) { count++; v &= v - 1; }
+        }
+    }
+    return count;
+}
+
+static void gol_step(void)
+{
+    uint8_t next[GOL_ROWS][TOTAL_BYTES];
+    memset(next, 0, sizeof(next));
+
+    for (int r = 0; r < GOL_ROWS; r++) {
+        for (int c = 0; c < GOL_COLS; c++) {
+            int neighbors = 0;
+            neighbors += gol_get(gol_grid, r-1, c-1);
+            neighbors += gol_get(gol_grid, r-1, c  );
+            neighbors += gol_get(gol_grid, r-1, c+1);
+            neighbors += gol_get(gol_grid, r,   c-1);
+            neighbors += gol_get(gol_grid, r,   c+1);
+            neighbors += gol_get(gol_grid, r+1, c-1);
+            neighbors += gol_get(gol_grid, r+1, c  );
+            neighbors += gol_get(gol_grid, r+1, c+1);
+
+            uint8_t alive = gol_get(gol_grid, r, c);
+            if (alive) {
+                if (neighbors == 2 || neighbors == 3)
+                    gol_set(next, r, c, 1);
+            } else {
+                if (neighbors == 3)
+                    gol_set(next, r, c, 1);
+            }
+        }
+    }
+
+    /* Check for stagnation (identical to previous generation) */
+    if (memcmp(next, gol_prev, sizeof(next)) == 0) {
+        gol_stale_count++;
+    } else if (memcmp(next, gol_grid, sizeof(next)) == 0) {
+        gol_stale_count++;
+    } else {
+        gol_stale_count = 0;
+    }
+
+    memcpy(gol_prev, gol_grid, sizeof(gol_grid));
+    memcpy(gol_grid, next, sizeof(next));
+}
+
+void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    uint32_t now = HAL_GetTick();
+
+    if (!gol_inited) {
+        gol_seed();
+        gol_last_tick = now;
+        gol_inited = true;
+    }
+
+    /* Evolve */
+    if (now - gol_last_tick >= GOL_STEP_MS) {
+        gol_step();
+        gol_last_tick = now;
+
+        /* Reseed if stale or population too low */
+        if (gol_stale_count >= GOL_STALE_LIMIT || gol_population() < 15) {
+            gol_seed();
+        }
+    }
+
+    /* Copy grid to output buffer */
+    memcpy(buf, gol_grid, sizeof(gol_grid));
+
+    /* Overlay time with cleared border */
+    const SensorData_t *data = SensorManager_GetData();
+    char time_str[16];
+    sprintf(time_str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
+
+    int text_w = Matrix_TextPixelWidth(time_str);
+    int text_x = (NUM_COLS - text_w) / 2;
+
+    for (int r = 0; r < NUM_ROWS; r++) {
+        for (int c = text_x - 2; c < text_x + text_w + 2; c++) {
+            if (c >= 0 && c < NUM_COLS) {
+                buf[r][c / 8] &= ~(1 << (c % 8));
+            }
+        }
+    }
+
+    Matrix_DrawText_Buf(buf, 0, text_x, time_str);
+}
+
+/* =====================================================================
+ *  SNAKE
+ *
+ *  Autonomous AI snake that wanders the 7x84 grid. The snake chases
+ *  a food pellet and grows when it eats. If it would collide with
+ *  itself, it picks the best safe direction. If no safe move exists,
+ *  it resets. Time is overlaid in the center.
+ *
+ *  Grid is the full display. Snake body stored as a ring buffer of
+ *  (row, col) positions for memory efficiency.
+ * =====================================================================*/
+
+#define SNAKE_MAX_LEN    120
+#define SNAKE_INIT_LEN   4
+#define SNAKE_STEP_MS    60
+#define SNAKE_GROW_AMT   3
+
+typedef struct {
+    uint8_t r;
+    uint8_t c;
+} SnakePos_t;
+
+static SnakePos_t snake_body[SNAKE_MAX_LEN];
+static int snake_head_idx  = 0;
+static int snake_len       = 0;
+static int8_t snake_dr     = 0;
+static int8_t snake_dc     = 1;
+static uint8_t snake_food_r = 0;
+static uint8_t snake_food_c = 0;
+static int snake_grow       = 0;
+static bool snake_inited    = false;
+static uint32_t snake_last_tick = 0;
+static uint16_t snake_rng   = 0xFACE;
+
+static uint8_t snake_rand8(void)
+{
+    snake_rng ^= snake_rng << 7;
+    snake_rng ^= snake_rng >> 9;
+    snake_rng ^= snake_rng << 8;
+    return (uint8_t)(snake_rng & 0xFF);
+}
+
+static bool snake_occupies(int r, int c)
+{
+    for (int i = 0; i < snake_len; i++) {
+        int idx = (snake_head_idx - i + SNAKE_MAX_LEN) % SNAKE_MAX_LEN;
+        if (snake_body[idx].r == r && snake_body[idx].c == c)
+            return true;
+    }
+    return false;
+}
+
+static void snake_place_food(void)
+{
+    /* Try random positions, fall back to scanning */
+    for (int attempts = 0; attempts < 200; attempts++) {
+        int r = snake_rand8() % GOL_ROWS;
+        int c = ((uint16_t)snake_rand8() * 3) % GOL_COLS;  /* spread across wide display */
+        if (!snake_occupies(r, c)) {
+            snake_food_r = (uint8_t)r;
+            snake_food_c = (uint8_t)c;
+            return;
+        }
+    }
+    /* Fallback: scan */
+    for (int r = 0; r < GOL_ROWS; r++) {
+        for (int c = 0; c < GOL_COLS; c++) {
+            if (!snake_occupies(r, c)) {
+                snake_food_r = (uint8_t)r;
+                snake_food_c = (uint8_t)c;
+                return;
+            }
+        }
+    }
+}
+
+static void snake_reset(void)
+{
+    snake_rng ^= (uint16_t)HAL_GetTick();
+    snake_len = SNAKE_INIT_LEN;
+    snake_head_idx = SNAKE_INIT_LEN - 1;
+    snake_dr = 0;
+    snake_dc = 1;
+    snake_grow = 0;
+
+    /* Place in upper-left area */
+    int start_r = 3;
+    int start_c = 5;
+    for (int i = 0; i < SNAKE_INIT_LEN; i++) {
+        int idx = SNAKE_INIT_LEN - 1 - i;
+        snake_body[idx].r = (uint8_t)start_r;
+        snake_body[idx].c = (uint8_t)(start_c + i);
+    }
+
+    snake_place_food();
+}
+
+static bool snake_is_safe(int r, int c)
+{
+    if (r < 0 || r >= GOL_ROWS || c < 0 || c >= GOL_COLS) return false;
+    return !snake_occupies(r, c);
+}
+
+static void snake_ai_choose_direction(void)
+{
+    SnakePos_t head = snake_body[snake_head_idx];
+    int hr = head.r, hc = head.c;
+    int fr = snake_food_r, fc = snake_food_c;
+
+    /* 4 possible directions */
+    static const int8_t dirs[4][2] = {{0,1},{0,-1},{-1,0},{1,0}};
+
+    int best_dir = -1;
+    int best_dist = 9999;
+
+    /* First pass: find safe direction closest to food */
+    for (int d = 0; d < 4; d++) {
+        int nr = hr + dirs[d][0];
+        int nc = hc + dirs[d][1];
+
+        /* Don't reverse into ourselves */
+        if (dirs[d][0] == -snake_dr && dirs[d][1] == -snake_dc && snake_len > 1)
+            continue;
+
+        if (!snake_is_safe(nr, nc)) continue;
+
+        int dist = (nr - fr) * (nr - fr) + (nc - fc) * (nc - fc);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_dir = d;
+        }
+    }
+
+    /* If no safe direction toward food, pick any safe direction */
+    if (best_dir < 0) {
+        for (int d = 0; d < 4; d++) {
+            int nr = hr + dirs[d][0];
+            int nc = hc + dirs[d][1];
+            if (dirs[d][0] == -snake_dr && dirs[d][1] == -snake_dc && snake_len > 1)
+                continue;
+            if (snake_is_safe(nr, nc)) {
+                best_dir = d;
+                break;
+            }
+        }
+    }
+
+    if (best_dir >= 0) {
+        snake_dr = dirs[best_dir][0];
+        snake_dc = dirs[best_dir][1];
+    }
+    /* If still no safe move, keep current direction (will die and reset) */
+}
+
+void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    uint32_t now = HAL_GetTick();
+
+    if (!snake_inited) {
+        snake_reset();
+        snake_last_tick = now;
+        snake_inited = true;
+    }
+
+    if (now - snake_last_tick >= SNAKE_STEP_MS) {
+        snake_last_tick = now;
+
+        /* AI decides direction */
+        snake_ai_choose_direction();
+
+        /* Compute new head */
+        SnakePos_t head = snake_body[snake_head_idx];
+        int nr = head.r + snake_dr;
+        int nc = head.c + snake_dc;
+
+        /* Wall collision or self collision -> reset */
+        if (nr < 0 || nr >= GOL_ROWS || nc < 0 || nc >= GOL_COLS || snake_occupies(nr, nc)) {
+            snake_reset();
+        } else {
+            /* Advance head */
+            snake_head_idx = (snake_head_idx + 1) % SNAKE_MAX_LEN;
+            snake_body[snake_head_idx].r = (uint8_t)nr;
+            snake_body[snake_head_idx].c = (uint8_t)nc;
+
+            if (snake_grow > 0) {
+                snake_len++;
+                if (snake_len > SNAKE_MAX_LEN) snake_len = SNAKE_MAX_LEN;
+                snake_grow--;
+            }
+            /* (if not growing, the tail naturally falls off since we only
+               use snake_len elements from head backwards) */
+
+            /* Check food */
+            if (nr == snake_food_r && nc == snake_food_c) {
+                snake_grow += SNAKE_GROW_AMT;
+                snake_place_food();
+            }
+        }
+    }
+
+    /* Draw snake body */
+    for (int i = 0; i < snake_len; i++) {
+        int idx = (snake_head_idx - i + SNAKE_MAX_LEN) % SNAKE_MAX_LEN;
+        int r = snake_body[idx].r;
+        int c = snake_body[idx].c;
+        if (r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS) {
+            buf[r][c / 8] |= (1 << (c % 8));
+        }
+    }
+
+    /* Draw food (blink) */
+    if ((now / 200) % 2) {
+        int r = snake_food_r;
+        int c = snake_food_c;
+        if (r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS) {
+            buf[r][c / 8] |= (1 << (c % 8));
+        }
+    }
+
+    /* Overlay time */
+    const SensorData_t *data = SensorManager_GetData();
+    char time_str[16];
+    sprintf(time_str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
+
+    int text_w = Matrix_TextPixelWidth(time_str);
+    int text_x = (NUM_COLS - text_w) / 2;
+
+    for (int r = 0; r < NUM_ROWS; r++) {
+        for (int c = text_x - 2; c < text_x + text_w + 2; c++) {
+            if (c >= 0 && c < NUM_COLS) {
+                buf[r][c / 8] &= ~(1 << (c % 8));
+            }
+        }
+    }
+
+    Matrix_DrawText_Buf(buf, 0, text_x, time_str);
+}
+
+/* =====================================================================
+ *  TYPEWRITER CLOCK
+ *
+ *  Each minute, the time "types" itself out one character at a time
+ *  from left to right, with a blinking cursor. Once fully typed,
+ *  the text holds until the next minute, when it clears and retypes.
+ *
+ *  Characters appear one at a time with a ~120ms typing interval.
+ *  A cursor block blinks after the last typed character.
+ * =====================================================================*/
+
+#define TW_CHAR_INTERVAL_MS  120
+#define TW_CURSOR_BLINK_MS   400
+
+static bool     tw_inited = false;
+static uint8_t  tw_last_minute = 0xFF;
+static uint8_t  tw_chars_shown = 0;
+static uint8_t  tw_total_chars = 0;
+static uint32_t tw_last_char_tick = 0;
+static char     tw_text[20];
+
+void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    const SensorData_t *data = SensorManager_GetData();
+    uint32_t now = HAL_GetTick();
+
+    uint8_t h = get_display_hour(data);
+    uint8_t m = data->minutes;
+    uint8_t s = data->seconds;
+
+    /* Build the full time string */
+    char full_str[20];
+    if (Settings_Is24Hour()) {
+        sprintf(full_str, "%02d:%02d:%02d", h, m, s);
+    } else {
+        char ap = (data->hours_24 < 12) ? 'a' : 'p';
+        sprintf(full_str, "%02d:%02d:%02d%c", h, m, s, ap);
+    }
+
+    /* Detect minute change -> restart typing */
+    if (!tw_inited || m != tw_last_minute) {
+        tw_last_minute = m;
+        tw_chars_shown = 0;
+
+        /* Build the target string (HH:MM without seconds for the typing part) */
+        if (Settings_Is24Hour()) {
+            sprintf(tw_text, "%02d:%02d", h, m);
+        } else {
+            char ap = (data->hours_24 < 12) ? 'a' : 'p';
+            sprintf(tw_text, "%02d:%02d%c", h, m, ap);
+        }
+        tw_total_chars = (uint8_t)strlen(tw_text);
+        tw_last_char_tick = now;
+        tw_inited = true;
+    }
+
+    /* Advance typing */
+    if (tw_chars_shown < tw_total_chars) {
+        if (now - tw_last_char_tick >= TW_CHAR_INTERVAL_MS) {
+            tw_chars_shown++;
+            tw_last_char_tick = now;
+        }
+    }
+
+    /* Draw the characters typed so far */
+    char partial[20];
+    memcpy(partial, tw_text, tw_chars_shown);
+    partial[tw_chars_shown] = '\0';
+
+    int text_w = Matrix_TextPixelWidth(tw_text);
+    int start_x = (NUM_COLS - text_w) / 2;
+
+    Matrix_DrawText_Buf(buf, 0, start_x, partial);
+
+    /* Draw blinking cursor after last typed character */
+    int partial_w = Matrix_TextPixelWidth(partial);
+    int cursor_x = start_x + partial_w;
+
+    bool cursor_on;
+    if (tw_chars_shown < tw_total_chars) {
+        /* Still typing: cursor always on */
+        cursor_on = true;
+    } else {
+        /* Done typing: cursor blinks */
+        cursor_on = ((now / TW_CURSOR_BLINK_MS) % 2) == 0;
+    }
+
+    if (cursor_on && cursor_x >= 0 && cursor_x < NUM_COLS) {
+        /* Draw a 1px wide, 7px tall cursor bar */
+        for (int r = 0; r < NUM_ROWS; r++) {
+            buf[r][cursor_x / 8] |= (1 << (cursor_x % 8));
+        }
+    }
+
+    /* Show seconds in tiny font at bottom-right */
+    {
+        char sec_str[4];
+        sprintf(sec_str, "%02d", s);
+        int sw = Matrix_TinyTextPixelWidth(sec_str);
+        Matrix_DrawTinyText_Buf(buf, 2, NUM_COLS - sw, sec_str);
+    }
+}
+
+/* =====================================================================
+ *  PONG CLOCK
+ *
+ *  Two AI paddles play Pong. The left score = hours, right = minutes.
+ *  When the time changes, the "losing" side lets a goal in.
+ *
+ *  Ball bounces naturally between points. Paddles track the ball
+ *  with slight delay for realism. Court has a dotted center line.
+ *
+ *  Field: columns 0-83, rows 0-6.
+ *  Left score area: cols 0-20, Right score area: cols 63-83.
+ *  Paddles: 3px tall, 1px wide. Left at col 1, Right at col 82.
+ *  Ball: 1x1 pixel.
+ * =====================================================================*/
+
+#define PONG_STEP_MS        40
+#define PONG_PADDLE_H        3
+#define PONG_PADDLE_LEFT_C   1
+#define PONG_PADDLE_RIGHT_C  82
+#define PONG_BALL_RESET_DELAY 800
+
+typedef struct {
+    /* Ball position in 8.8 fixed point for sub-pixel movement */
+    int16_t ball_r;     /* row * 256 */
+    int16_t ball_c;     /* col * 256 */
+    int16_t ball_dr;    /* row velocity */
+    int16_t ball_dc;    /* col velocity */
+
+    int8_t pad_left;    /* top row of left paddle (0 to NUM_ROWS-PADDLE_H) */
+    int8_t pad_right;   /* top row of right paddle */
+
+    uint8_t score_h;    /* displayed hours */
+    uint8_t score_m;    /* displayed minutes */
+
+    bool     scoring;       /* ball scored, waiting to reset */
+    uint32_t score_tick;    /* when the score happened */
+    bool     let_left_in;   /* deliberately miss on left */
+    bool     let_right_in;  /* deliberately miss on right */
+
+    uint32_t last_tick;
+    bool     inited;
+} PongState_t;
+
+static PongState_t pong;
+static uint16_t pong_rng = 0xD00D;
+
+static int8_t pong_rand_dir(void)
+{
+    pong_rng ^= pong_rng << 7;
+    pong_rng ^= pong_rng >> 9;
+    pong_rng ^= pong_rng << 8;
+    return (pong_rng & 1) ? 1 : -1;
+}
+
+static void pong_serve(void)
+{
+    /* Serve from center */
+    pong.ball_r = (NUM_ROWS / 2) * 256;
+    pong.ball_c = (NUM_COLS / 2) * 256;
+
+    /* Random vertical direction */
+    pong.ball_dr = pong_rand_dir() * 128;  /* ~0.5 pixel per step */
+
+    /* Serve toward whichever side needs to score (or random) */
+    if (pong.let_left_in) {
+        pong.ball_dc = -256;  /* serve left */
+    } else if (pong.let_right_in) {
+        pong.ball_dc = 256;   /* serve right */
+    } else {
+        pong.ball_dc = pong_rand_dir() * 256;
+    }
+
+    pong.scoring = false;
+}
+
+static void pong_init(void)
+{
+    const SensorData_t *data = SensorManager_GetData();
+    pong.score_h = get_display_hour(data);
+    pong.score_m = data->minutes;
+    pong.pad_left = (NUM_ROWS - PONG_PADDLE_H) / 2;
+    pong.pad_right = (NUM_ROWS - PONG_PADDLE_H) / 2;
+    pong.let_left_in = false;
+    pong.let_right_in = false;
+    pong.scoring = false;
+    pong.last_tick = HAL_GetTick();
+    pong.inited = true;
+    pong_rng ^= (uint16_t)HAL_GetTick();
+    pong_serve();
+}
+
+static void pong_move_paddle(int8_t *pad, int target_r, bool miss)
+{
+    /* Target is the center of the paddle aligned to ball */
+    int pad_center = *pad + PONG_PADDLE_H / 2;
+
+    if (miss) {
+        /* Move away from ball to deliberately miss */
+        if (target_r <= NUM_ROWS / 2) {
+            if (*pad < NUM_ROWS - PONG_PADDLE_H) (*pad)++;
+        } else {
+            if (*pad > 0) (*pad)--;
+        }
+        return;
+    }
+
+    if (pad_center < target_r) {
+        if (*pad < NUM_ROWS - PONG_PADDLE_H) (*pad)++;
+    } else if (pad_center > target_r) {
+        if (*pad > 0) (*pad)--;
+    }
+}
+
+void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    uint32_t now = HAL_GetTick();
+
+    if (!pong.inited) {
+        pong_init();
+    }
+
+    /* Check if real time changed — trigger a goal */
+    const SensorData_t *data = SensorManager_GetData();
+    uint8_t real_h = get_display_hour(data);
+    uint8_t real_m = data->minutes;
+
+    if (!pong.scoring) {
+        if (real_m != pong.score_m) {
+            /* Minutes changed — right side needs to score */
+            pong.let_right_in = true;
+            pong.let_left_in = false;
+        }
+        if (real_h != pong.score_h) {
+            /* Hours changed — left side needs to score */
+            pong.let_left_in = true;
+            /* Also update minutes */
+            pong.let_right_in = (real_m != pong.score_m);
+        }
+    }
+
+    /* Step physics */
+    if (now - pong.last_tick >= PONG_STEP_MS) {
+        pong.last_tick = now;
+
+        if (pong.scoring) {
+            /* Wait then reset */
+            if (now - pong.score_tick >= PONG_BALL_RESET_DELAY) {
+                pong_serve();
+            }
+        } else {
+            /* Move ball */
+            pong.ball_r += pong.ball_dr;
+            pong.ball_c += pong.ball_dc;
+
+            int br = pong.ball_r / 256;
+            int bc = pong.ball_c / 256;
+
+            /* Top/bottom bounce */
+            if (br <= 0) {
+                pong.ball_r = 0;
+                pong.ball_dr = -pong.ball_dr;
+                br = 0;
+            }
+            if (br >= NUM_ROWS - 1) {
+                pong.ball_r = (NUM_ROWS - 1) * 256;
+                pong.ball_dr = -pong.ball_dr;
+                br = NUM_ROWS - 1;
+            }
+
+            /* Left paddle collision */
+            if (bc <= PONG_PADDLE_LEFT_C + 1 && pong.ball_dc < 0) {
+                if (br >= pong.pad_left && br < pong.pad_left + PONG_PADDLE_H) {
+                    pong.ball_dc = -pong.ball_dc;
+                    pong.ball_c = (PONG_PADDLE_LEFT_C + 2) * 256;
+
+                    /* Add english based on where ball hit paddle */
+                    int hit_pos = br - pong.pad_left;
+                    if (hit_pos == 0) pong.ball_dr -= 64;
+                    else if (hit_pos == PONG_PADDLE_H - 1) pong.ball_dr += 64;
+
+                    /* Clamp vertical speed */
+                    if (pong.ball_dr > 200) pong.ball_dr = 200;
+                    if (pong.ball_dr < -200) pong.ball_dr = -200;
+                } else if (bc <= 0) {
+                    /* Goal on left side — right (minutes) scores */
+                    pong.score_m = real_m;
+                    if (pong.let_left_in && real_h != pong.score_h) {
+                        pong.score_h = real_h;
+                        pong.let_left_in = false;
+                    }
+                    pong.let_right_in = false;
+                    pong.scoring = true;
+                    pong.score_tick = now;
+                }
+            }
+
+            /* Right paddle collision */
+            if (bc >= PONG_PADDLE_RIGHT_C - 1 && pong.ball_dc > 0) {
+                if (br >= pong.pad_right && br < pong.pad_right + PONG_PADDLE_H) {
+                    pong.ball_dc = -pong.ball_dc;
+                    pong.ball_c = (PONG_PADDLE_RIGHT_C - 2) * 256;
+
+                    int hit_pos = br - pong.pad_right;
+                    if (hit_pos == 0) pong.ball_dr -= 64;
+                    else if (hit_pos == PONG_PADDLE_H - 1) pong.ball_dr += 64;
+
+                    if (pong.ball_dr > 200) pong.ball_dr = 200;
+                    if (pong.ball_dr < -200) pong.ball_dr = -200;
+                } else if (bc >= NUM_COLS - 1) {
+                    /* Goal on right side — left (hours) scores */
+                    pong.score_h = real_h;
+                    if (pong.let_right_in && real_m != pong.score_m) {
+                        pong.score_m = real_m;
+                        pong.let_right_in = false;
+                    }
+                    pong.let_left_in = false;
+                    pong.scoring = true;
+                    pong.score_tick = now;
+                }
+            }
+
+            /* Move paddles */
+            int ball_target_r = pong.ball_r / 256;
+            pong_move_paddle(&pong.pad_left, ball_target_r,
+                             pong.let_left_in && pong.ball_dc < 0);
+            pong_move_paddle(&pong.pad_right, ball_target_r,
+                             pong.let_right_in && pong.ball_dc > 0);
+        }
+    }
+
+    /* ---- DRAW ---- */
+
+    /* Dotted center line */
+    {
+        int center_c = NUM_COLS / 2;
+        for (int r = 0; r < NUM_ROWS; r++) {
+            if (r % 2 == 0) {
+                buf[r][center_c / 8] |= (1 << (center_c % 8));
+            }
+        }
+    }
+
+    /* Left paddle */
+    for (int i = 0; i < PONG_PADDLE_H; i++) {
+        int r = pong.pad_left + i;
+        if (r >= 0 && r < NUM_ROWS) {
+            buf[r][PONG_PADDLE_LEFT_C / 8] |= (1 << (PONG_PADDLE_LEFT_C % 8));
+        }
+    }
+
+    /* Right paddle */
+    for (int i = 0; i < PONG_PADDLE_H; i++) {
+        int r = pong.pad_right + i;
+        if (r >= 0 && r < NUM_ROWS) {
+            buf[r][PONG_PADDLE_RIGHT_C / 8] |= (1 << (PONG_PADDLE_RIGHT_C % 8));
+        }
+    }
+
+    /* Ball */
+    if (!pong.scoring) {
+        int br = pong.ball_r / 256;
+        int bc = pong.ball_c / 256;
+        if (br >= 0 && br < NUM_ROWS && bc >= 0 && bc < NUM_COLS) {
+            buf[br][bc / 8] |= (1 << (bc % 8));
+        }
+    }
+
+    /* Scores — hours on left, minutes on right */
+    {
+        char h_str[4], m_str[4];
+        sprintf(h_str, "%02d", pong.score_h);
+        sprintf(m_str, "%02d", pong.score_m);
+
+        /* Left score: centered in left half */
+        int lw = Matrix_TextPixelWidth(h_str);
+        int lx = (NUM_COLS / 2 - lw) / 2;
+        Matrix_DrawText_Buf(buf, 0, lx, h_str);
+
+        /* Right score: centered in right half */
+        int rw = Matrix_TextPixelWidth(m_str);
+        int rx = NUM_COLS / 2 + (NUM_COLS / 2 - rw) / 2;
+        Matrix_DrawText_Buf(buf, 0, rx, m_str);
+    }
 }
