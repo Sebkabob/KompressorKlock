@@ -23,11 +23,17 @@ typedef void (*ScreenRenderFunc_t)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 #define MAX_SCREENS              12
 #define AUTO_CYCLE_INTERVAL_MS   10000
 
-// Time-based transition speeds (in milliseconds)
-// These are constant regardless of timer period / brightness
-#define SLIDE_H_DURATION_MS      500   // Horizontal slide total time
-#define SLIDE_V_DURATION_MS      400   // Vertical slide total time
-#define DISSOLVE_PHASE_MS        200   // Each dissolve phase (out + in)
+/* ================= TRANSITION SPEED ================= */
+typedef enum {
+    TRANSITION_SPEED_SLOW = 0,
+    TRANSITION_SPEED_NORMAL,
+    TRANSITION_SPEED_FAST,
+    TRANSITION_SPEED_FASTEST,
+    TRANSITION_SPEED_COUNT
+} TransitionSpeed_t;
+
+void Screen_SetTransitionSpeed(TransitionSpeed_t speed);
+TransitionSpeed_t Screen_GetTransitionSpeed(void);
 
 /* ================= PUBLIC API ================= */
 

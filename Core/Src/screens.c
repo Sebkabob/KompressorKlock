@@ -57,6 +57,34 @@ typedef struct {
 
 static ScreenManager_t sm;
 
+/* ================= TRANSITION SPEED ================= */
+
+typedef struct {
+    uint16_t slide_h_ms;
+    uint16_t slide_v_ms;
+    uint16_t dissolve_ms;
+} TransitionTiming_t;
+
+static const TransitionTiming_t speed_table[TRANSITION_SPEED_COUNT] = {
+    [TRANSITION_SPEED_SLOW]    = { 700, 600, 300 },
+    [TRANSITION_SPEED_NORMAL]  = { 500, 400, 200 },
+    [TRANSITION_SPEED_FAST]    = { 300, 200, 125 },
+    [TRANSITION_SPEED_FASTEST] = { 150,  75,  75 },
+};
+
+static TransitionSpeed_t current_speed = TRANSITION_SPEED_NORMAL;
+
+void Screen_SetTransitionSpeed(TransitionSpeed_t speed)
+{
+    if (speed < TRANSITION_SPEED_COUNT)
+        current_speed = speed;
+}
+
+TransitionSpeed_t Screen_GetTransitionSpeed(void)
+{
+    return current_speed;
+}
+
 /* ================= PRESS BAR OVERLAY ================= */
 /*
  * Draws a 1-pixel-wide bar on the rightmost column (col 83).
@@ -202,7 +230,9 @@ static bool render_dissolve(void)
     uint32_t elapsed = HAL_GetTick() - sm.dissolve_phase_start;
     uint8_t composite[NUM_ROWS][TOTAL_BYTES];
 
-    int target_count = (int)((uint32_t)elapsed * TOTAL_PIXELS / DISSOLVE_PHASE_MS);
+    uint16_t dissolve_ms = speed_table[current_speed].dissolve_ms;
+
+    int target_count = (int)((uint32_t)elapsed * TOTAL_PIXELS / dissolve_ms);
     if (target_count > TOTAL_PIXELS) target_count = TOTAL_PIXELS;
 
     if (target_count == sm.last_dissolve_count) return false;
@@ -253,7 +283,7 @@ static void run_transition(void)
     switch (sm.active_transition) {
         case TRANSITION_SLIDE_LEFT:
         case TRANSITION_SLIDE_RIGHT: {
-            int offset = (int)((uint32_t)elapsed * NUM_COLS / SLIDE_H_DURATION_MS);
+            int offset = (int)((uint32_t)elapsed * NUM_COLS / speed_table[current_speed].slide_h_ms);
             if (offset >= NUM_COLS) {
                 offset = NUM_COLS;
                 done = true;
@@ -268,7 +298,7 @@ static void run_transition(void)
 
         case TRANSITION_SLIDE_UP:
         case TRANSITION_SLIDE_DOWN: {
-            int offset = (int)((uint32_t)elapsed * NUM_ROWS / SLIDE_V_DURATION_MS);
+            int offset = (int)((uint32_t)elapsed * NUM_ROWS / speed_table[current_speed].slide_v_ms);
             if (offset >= NUM_ROWS) {
                 offset = NUM_ROWS;
                 done = true;

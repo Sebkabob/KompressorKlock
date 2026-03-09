@@ -20,6 +20,7 @@ typedef enum {
     SETTING_12_24HR,
     SETTING_TEMP_UNIT,
     SETTING_TIMEZONE,
+    SETTING_TRANSITIONS,
     SETTING_EXIT,
     SETTING_COUNT
 } SettingID_t;
@@ -78,6 +79,7 @@ void Settings_SetHomeTimezoneIndex(uint8_t idx);
  *   - Auto / manual brightness + manual percent
  *   - Last active screen index
  *   - Home timezone index
+ *   - Transition speed
  *
  * Call Settings_LoadFromEEPROM() once at startup AFTER SensorManager_Init,
  * Screen_Init, and all Screen_Register calls.

@@ -2,6 +2,7 @@
 #include "settings.h"
 #include "sensor_manager.h"
 #include "rtc_rv3032.h"
+#include "screens.h"
 #include "main.h"
 #include <string.h>
 #include <stdio.h>
@@ -511,5 +512,57 @@ bool TimezoneSetting_NeedsRedraw(void)
 bool TimezoneSetting_IsOnOK(void)
 {
     /* Instant confirm on press — same as brightness */
+    return true;
+}
+
+/* =====================================================================
+ *  TRANSITIONS
+ *
+ *  Scroll through speed options. Live preview. Press to confirm.
+ * =====================================================================*/
+
+static TransitionSpeed_t trans_value;
+
+static const char * const speed_labels[TRANSITION_SPEED_COUNT] = {
+    "Slow",
+    "Normal",
+    "Fast",
+    "Fastest"
+};
+
+void TransitionSetting_Enter(void)
+{
+    trans_value = Screen_GetTransitionSpeed();
+}
+
+void TransitionSetting_OnScroll(int direction)
+{
+    int v = (int)trans_value + direction;
+    if (v < 0) v = (int)TRANSITION_SPEED_COUNT - 1;
+    if (v >= (int)TRANSITION_SPEED_COUNT) v = 0;
+    trans_value = (TransitionSpeed_t)v;
+
+    /* Live preview */
+    Screen_SetTransitionSpeed(trans_value);
+}
+
+bool TransitionSetting_OnPress(void)
+{
+    /* Already applied from live preview */
+    return true;
+}
+
+void TransitionSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    Matrix_DrawTextCentered_Buf(buf, 0, speed_labels[trans_value]);
+}
+
+bool TransitionSetting_NeedsRedraw(void)
+{
+    return false;
+}
+
+bool TransitionSetting_IsOnOK(void)
+{
     return true;
 }

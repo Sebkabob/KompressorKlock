@@ -36,7 +36,7 @@ static int menu_index = 0;
  *
  *  RV-3032 User EEPROM: 32 bytes at addresses 0xCB-0xEA.
  *
- *  Layout (9 bytes, version 0x03):
+ *  Layout (10 bytes, version 0x04):
  *    0xCB  magic   (0xA5 = valid block)
  *    0xCC  flags   bit0=24hr, bit1=celsius, bit2=auto_brightness
  *    0xCD  manual_brightness_percent (1-100)
@@ -44,8 +44,9 @@ static int menu_index = 0;
  *    0xCF  home_tz_index (0-25)
  *    0xD0  wc_tz0 — world clock slot 0 timezone index (0-25)
  *    0xD1  wc_tz1 — world clock slot 1 timezone index (0-25)
- *    0xD2  version (0x03)
- *    0xD3  checksum (XOR of 0xCB-0xD2)
+ *    0xD2  transition_speed (0-3)
+ *    0xD3  version (0x04)
+ *    0xD4  checksum (XOR of 0xCB-0xD3)
  * ================================================================= */
 
 #define USER_EE_BASE        0xCB
@@ -57,13 +58,14 @@ static int menu_index = 0;
 #define ADDR_TIMEZONE       (USER_EE_BASE + 4)
 #define ADDR_WC_TZ0         (USER_EE_BASE + 5)
 #define ADDR_WC_TZ1         (USER_EE_BASE + 6)
-#define ADDR_VERSION        (USER_EE_BASE + 7)
-#define ADDR_CHECKSUM       (USER_EE_BASE + 8)
+#define ADDR_TRANS_SPEED    (USER_EE_BASE + 7)
+#define ADDR_VERSION        (USER_EE_BASE + 8)
+#define ADDR_CHECKSUM       (USER_EE_BASE + 9)
 
-#define BLOCK_SIZE          9
+#define BLOCK_SIZE          10
 
 #define EE_MAGIC            0xA5
-#define EE_VERSION          0x03
+#define EE_VERSION          0x04
 
 #define FLAG_24HOUR         (1 << 0)
 #define FLAG_CELSIUS        (1 << 1)
@@ -91,6 +93,7 @@ typedef struct {
     uint8_t timezone;
     uint8_t wc_tz0;
     uint8_t wc_tz1;
+    uint8_t trans_speed;
     uint8_t version;
     uint8_t checksum;
 } EEBlock_t;
@@ -220,6 +223,8 @@ static void ee_build_block(void)
     ee_cached.wc_tz0 = (uint8_t)((wc0 >= 0 && wc0 < (int)TZ_TABLE_SIZE) ? wc0 : 7);
     ee_cached.wc_tz1 = (uint8_t)((wc1 >= 0 && wc1 < (int)TZ_TABLE_SIZE) ? wc1 : 12);
 
+    ee_cached.trans_speed = (uint8_t)Screen_GetTransitionSpeed();
+
     /* screen field is set separately via Settings_SetSavedScreen */
 
     ee_cached.checksum = ee_checksum(&ee_cached);
@@ -253,6 +258,13 @@ static void ee_apply_block(const EEBlock_t *b)
     if (b->wc_tz1 < TZ_TABLE_SIZE) {
         WorldClock_SetSlotIndex(1, (int)b->wc_tz1);
     }
+
+    /* Restore transition speed */
+    if (b->trans_speed < TRANSITION_SPEED_COUNT) {
+        Screen_SetTransitionSpeed((TransitionSpeed_t)b->trans_speed);
+    } else {
+        Screen_SetTransitionSpeed(TRANSITION_SPEED_NORMAL);
+    }
 }
 
 /* ================= EEPROM PUBLIC API ================= */
@@ -270,6 +282,7 @@ void Settings_LoadFromEEPROM(void)
         /* First boot, corrupt, or version upgrade — write current defaults */
         ee_build_block();
         ee_cached.screen = 0;
+        ee_cached.trans_speed = (uint8_t)TRANSITION_SPEED_NORMAL;
         ee_force_write_all();
     }
 
@@ -346,6 +359,7 @@ static const SettingEnterFunc setting_enter[SETTING_COUNT] = {
     NULL,                       /* 12/24hr — inline toggle */
     NULL,                       /* temp unit — inline toggle */
     TimezoneSetting_Enter,
+    TransitionSetting_Enter,
     NULL,                       /* exit */
 };
 
@@ -356,6 +370,7 @@ static const SettingScrollFunc setting_scroll[SETTING_COUNT] = {
     NULL,
     NULL,
     TimezoneSetting_OnScroll,
+    TransitionSetting_OnScroll,
     NULL,
 };
 
@@ -366,6 +381,7 @@ static const SettingPressFunc setting_press[SETTING_COUNT] = {
     NULL,
     NULL,
     TimezoneSetting_OnPress,
+    TransitionSetting_OnPress,
     NULL,
 };
 
@@ -376,6 +392,7 @@ static const SettingRenderFunc setting_render[SETTING_COUNT] = {
     NULL,
     NULL,
     TimezoneSetting_Render,
+    TransitionSetting_Render,
     NULL,
 };
 
@@ -386,6 +403,7 @@ static const SettingNeedsRedrawFunc setting_needs_redraw[SETTING_COUNT] = {
     NULL,
     NULL,
     TimezoneSetting_NeedsRedraw,
+    TransitionSetting_NeedsRedraw,
     NULL,
 };
 
@@ -396,6 +414,7 @@ static const SettingIsOnOKFunc setting_is_on_ok[SETTING_COUNT] = {
     NULL,
     NULL,
     TimezoneSetting_IsOnOK,
+    TransitionSetting_IsOnOK,
     NULL,
 };
 
@@ -409,14 +428,15 @@ static bool is_inline_setting(int idx)
 static const char* get_menu_label(int idx)
 {
     switch (idx) {
-        case SETTING_TIME_SET:   return "Time Set";
-        case SETTING_DATE_SET:   return "Date Set";
-        case SETTING_BRIGHTNESS: return "Brightness";
-        case SETTING_12_24HR:    return use_24hour ? "24hr" : "12hr";
-        case SETTING_TEMP_UNIT:  return use_celsius ? "\x03""C" : "\x03""F";
-        case SETTING_TIMEZONE:   return "Time Zone";
-        case SETTING_EXIT:       return "Exit";
-        default:                 return "???";
+        case SETTING_TIME_SET:    return "Time Set";
+        case SETTING_DATE_SET:    return "Date Set";
+        case SETTING_BRIGHTNESS:  return "Brightness";
+        case SETTING_12_24HR:     return use_24hour ? "24hr" : "12hr";
+        case SETTING_TEMP_UNIT:   return use_celsius ? "\x03""C" : "\x03""F";
+        case SETTING_TIMEZONE:    return "Time Zone";
+        case SETTING_TRANSITIONS: return "Transitions";
+        case SETTING_EXIT:        return "Exit";
+        default:                  return "???";
     }
 }
 
@@ -487,7 +507,8 @@ void Settings_OnPress(void)
         if (setting_press[menu_index]) {
             bool done = setting_press[menu_index]();
             if (done) {
-                if (menu_index == SETTING_BRIGHTNESS || menu_index == SETTING_TIMEZONE) {
+                if (menu_index == SETTING_BRIGHTNESS || menu_index == SETTING_TIMEZONE ||
+                    menu_index == SETTING_TRANSITIONS) {
                     ee_dirty = true;
                 }
                 state = SETTINGS_STATE_MENU;

@@ -50,4 +50,13 @@ void TimezoneSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 bool TimezoneSetting_NeedsRedraw(void);
 bool TimezoneSetting_IsOnOK(void);
 
+/* ================= TRANSITIONS ================= */
+
+void TransitionSetting_Enter(void);
+void TransitionSetting_OnScroll(int direction);
+bool TransitionSetting_OnPress(void);
+void TransitionSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+bool TransitionSetting_NeedsRedraw(void);
+bool TransitionSetting_IsOnOK(void);
+
 #endif // SETTINGS_SCREENS_H
