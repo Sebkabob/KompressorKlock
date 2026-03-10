@@ -4,7 +4,7 @@
 *	Kompressor Klock
 *	Sebastian Forenza 2026
 *
-*	Code mostly written by Claude I can't lie
+*	Version 1.0
 *
   *
   ******************************************************************************
