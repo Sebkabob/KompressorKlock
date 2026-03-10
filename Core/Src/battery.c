@@ -33,6 +33,8 @@ bool BATTERY_Init(void)
         return false;
     }
 
+    bq27427_set_current_polarity(0); // 0 = Positive current means battery is charging
+
     /*
      * Only reconfigure the gauge if it experienced a power-on reset
      * (ITPOR flag set). If only the MCU power-cycled but the battery
@@ -61,7 +63,6 @@ bool BATTERY_Init(void)
         return false;
     }
 
-    bq27427_set_current_polarity(0); // 0 = Positive current means battery is charging
     bq27427_set_capacity(4900);
     bq27427_set_terminate_voltage(3000);
     bq27427_set_taper_voltage(4040);
