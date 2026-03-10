@@ -288,12 +288,12 @@ void Screen_TimeDateCompact(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     uint8_t month = RV3032_GetMonth();
     uint8_t date = RV3032_GetDate();
-    uint8_t year = (uint8_t)(RV3032_GetYear() - 2000);
+//    uint8_t year = (uint8_t)(RV3032_GetYear() - 2000);
 
     if (Settings_Is24Hour()) {
-        sprintf(date_str, "%d/%d/%02d", date, month, year);
+        sprintf(date_str, "%d/%d", date, month);
     } else {
-        sprintf(date_str, "%d/%d/%02d", month, date, year);
+        sprintf(date_str, "%d/%d", month, date);
     }
 
     Matrix_DrawTextRight_Buf(buf, 0, date_str);
