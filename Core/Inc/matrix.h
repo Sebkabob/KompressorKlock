@@ -9,7 +9,6 @@
 #define TOTAL_BYTES 11
 
 extern const uint8_t kompressor_logo[NUM_ROWS][TOTAL_BYTES];
-extern const uint8_t buy_a_wd[NUM_ROWS][TOTAL_BYTES];
 
 void Matrix_Init(void);
 void Matrix_Task(void);
@@ -24,14 +23,11 @@ void Matrix_ScrollText(const char *text, int offset);
 
 void Matrix_DrawBitmap(const uint8_t bitmap[NUM_ROWS][TOTAL_BYTES]);
 
-// Load a pre-rendered buffer directly into the display buffer
 void Matrix_LoadBuffer(const uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
-// Brightness control (0 = off, 1 = dimmest, 255 = full brightness)
 void Matrix_SetBrightness(uint8_t brightness);
 uint8_t Matrix_GetBrightness(void);
 
-// Draw into an arbitrary buffer (for offscreen rendering by screens.c)
 void Matrix_DrawChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c);
 void Matrix_DrawText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text);
 void Matrix_DrawTextCentered_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, const char *text);
@@ -43,5 +39,22 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
                            uint32_t speed_ms, uint32_t *last_scroll_tick);
 
 void Matrix_TIM3_IRQHandler(void);
+
+void Matrix_DrawBatteryIcon_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int col, uint8_t soc);
+
+int Matrix_TextPixelWidth(const char *text);
+
+void Matrix_DrawBatteryIcon_Blink_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES],
+                                       int col, uint8_t soc, uint8_t blink_bar);
+
+/* ================= TINY 3x5 FONT ================= */
+/*
+ * Compact font for labels. 3 pixels wide, 5 pixels tall.
+ * Drawn starting at a given row offset (occupies rows row..row+4).
+ * 1px gap between characters. Supports A-Z, 0-9, space, colon.
+ */
+void Matrix_DrawTinyChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c);
+void Matrix_DrawTinyText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text);
+int  Matrix_TinyTextPixelWidth(const char *text);
 
 #endif

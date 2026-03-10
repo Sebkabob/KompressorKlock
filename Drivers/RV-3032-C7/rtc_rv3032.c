@@ -57,6 +57,11 @@ bool RV3032_Init(I2C_HandleTypeDef *hi2c)
     /* Clear time array */
     memset(_time, 0, sizeof(_time));
 
+    uint8_t pmu = RV3032_ReadRegister(0xC0);
+    if ((pmu & 0x30) != 0x20) {
+        RV3032_EnableBackupSwitchover();
+    }
+
     return true;
 }
 
@@ -224,7 +229,7 @@ bool RV3032_SetTime(uint8_t sec, uint8_t min, uint8_t hour,
     _time[TIME_MINUTES] = RV3032_DECtoBCD(min);
     _time[TIME_HOURS] = RV3032_DECtoBCD(hour);
     _time[TIME_DATE] = RV3032_DECtoBCD(date);
-    _time[TIME_WEEKDAY] = 1 << weekday;  /* Weekday is bit-encoded */
+    _time[TIME_WEEKDAY] = weekday;  /* Weekday is bit-encoded */
     _time[TIME_MONTH] = RV3032_DECtoBCD(month);
     _time[TIME_YEAR] = RV3032_DECtoBCD(year - 2000);
 
@@ -307,7 +312,7 @@ bool RV3032_SetWeekday(uint8_t value)
     {
         value = 6;
     }
-    _time[TIME_WEEKDAY] = 1 << value;
+    _time[TIME_WEEKDAY] = value;
     return RV3032_SetTimeArray(_time, TIME_ARRAY_LENGTH);
 }
 
@@ -392,17 +397,7 @@ uint8_t RV3032_GetDate(void)
 
 uint8_t RV3032_GetWeekday(void)
 {
-    uint8_t tempWeekday = _time[TIME_WEEKDAY];
-
-    /* Convert from bit-encoded to 0-6 value */
-    uint8_t day = 0;
-    while (tempWeekday > 1)
-    {
-        tempWeekday >>= 1;
-        day++;
-    }
-
-    return day;
+	return _time[TIME_WEEKDAY] & 0x07;
 }
 
 uint8_t RV3032_GetMonth(void)
@@ -787,4 +782,74 @@ static bool RV3032_WriteTwoBits(uint8_t regAddr, uint8_t bitAddr, uint8_t bitsTo
     value &= ~(0x03 << bitAddr);
     value |= (bitsToWrite & 0x03) << bitAddr;
     return RV3032_WriteRegister(regAddr, value);
+}
+
+/**
+ * @brief Enable battery backup switchover in the EEPROM PMU register.
+ * @param bsm_mode  RV3032_BSM_DSM (0x01) for direct switching,
+ *                   RV3032_BSM_LSM (0x02) for level switching
+ * @return true on success
+ *
+ * Procedure per datasheet §4.6.10:
+ *   1. Set EERD=1 to disable automatic EEPROM refresh
+ *   2. Wait for EEbusy=0
+ *   3. Write new PMU value to RAM mirror (0xC0)
+ *   4. Issue Update command (0x11) to burn to EEPROM
+ *   5. Wait for EEbusy=0
+ *   6. Clear EERD=0 to re-enable auto refresh
+ */
+bool RV3032_EnableBackupSwitchover(void)
+{
+    /*
+     * Target EEPROM PMU value: 0x20
+     *   NCLKE = 0  (bit 7)
+     *   BSM   = 10 (bits 5:4) — Level Switching Mode
+     *   TCR   = 00 (bits 3:2) — doesn't matter, charger off
+     *   TCM   = 00 (bits 1:0) — trickle charger OFF
+     *
+     * LSM switches to VBACKUP only when VDD < 2.0V,
+     * so a 3.7V Li-ion on VBACKUP won't cause immediate switchover.
+     */
+    const uint8_t desired_pmu = 0x20;
+
+    /* 1. Disable auto EEPROM refresh */
+    uint8_t ctrl1 = RV3032_ReadRegister(0x10);
+    ctrl1 |= (1 << 2);
+    RV3032_WriteRegister(0x10, ctrl1);
+
+    /* 2. Wait for EEbusy */
+    HAL_Delay(100);
+    for (int i = 0; i < 200; i++) {
+        if (!(RV3032_ReadRegister(0x0E) & (1 << 2)))
+            break;
+        HAL_Delay(1);
+    }
+
+    /* 3. Write safe PMU (BSM=00) to RAM mirror first — required for EEPROM access */
+    RV3032_WriteRegister(0xC0, 0x00);
+
+    /* 4. Burn desired value directly to EEPROM using single-byte write */
+    RV3032_WriteRegister(0x3D, 0xC0);          /* EE Address = PMU */
+    RV3032_WriteRegister(0x3E, desired_pmu);   /* EE Data = 0x20   */
+    RV3032_WriteRegister(0x3F, 0x21);          /* Write single byte */
+
+    HAL_Delay(10);
+    for (int i = 0; i < 200; i++) {
+        if (!(RV3032_ReadRegister(0x0E) & (1 << 2)))
+            break;
+        HAL_Delay(1);
+    }
+
+    /* 5. Now activate in RAM mirror */
+    RV3032_WriteRegister(0xC0, desired_pmu);
+
+    /* 6. Re-enable auto refresh */
+    ctrl1 = RV3032_ReadRegister(0x10);
+    ctrl1 &= ~(1 << 2);
+    RV3032_WriteRegister(0x10, ctrl1);
+
+    /* 7. Verify */
+    HAL_Delay(100);
+    uint8_t verify = RV3032_ReadRegister(0xC0);
+    return ((verify & 0x30) == 0x20);
 }

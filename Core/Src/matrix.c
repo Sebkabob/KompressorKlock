@@ -1,5 +1,6 @@
 #include "matrix.h"
 #include <string.h>
+#include <stdbool.h>
 
 /* ================= FRAMEBUFFER ================= */
 static uint8_t display_buffer[NUM_ROWS][TOTAL_BYTES];
@@ -39,6 +40,10 @@ static volatile uint8_t current_row = 0;
 static volatile uint16_t brightness_ccr = TIMER_ARR; /* current CCR1 value */
 static volatile uint8_t  brightness_off = 0;          /* 1 = display off   */
 
+static volatile uint16_t pending_ccr = TIMER_ARR;
+static volatile uint8_t  pending_off = 0;
+static volatile bool     ccr_pending = false;
+
 /* ================= ROW PINS ================= */
 const uint16_t ROW_PINS[NUM_ROWS] =
 {
@@ -56,6 +61,7 @@ static const uint8_t font5x7[128][5] =
 [0x01] = {0x38, 0x44, 0x43, 0x44, 0x38}, //water drop
 [0x02] = {0x08, 0x6c, 0x3e, 0x1b, 0x08}, //bolt
 [0x03] = {0x07, 0x05, 0x07, 0x00, 0x00}, //degree
+[0x04] = {0x00, 0x7f, 0x00, 0x7f, 0x00}, //pause
 
 [':'] = {0x00, 0x36, 0x36, 0x00, 0x00},
 [';'] = {0x00, 0x56, 0x36, 0x00, 0x00},
@@ -63,6 +69,7 @@ static const uint8_t font5x7[128][5] =
 ['.'] = {0x00, 0x60, 0x60, 0x00, 0x00},
 ['"'] = {0x00, 0x07, 0x07, 0x00, 0x00},
 ['\''] = {0x00, 0x07, 0x00, 0x00, 0x00},
+['/'] = {0x20, 0x10, 0x08, 0x04, 0x02},
 ['-'] = {0x08, 0x08, 0x08, 0x08, 0x08},
 ['+'] = {0x08, 0x08, 0x3E, 0x08, 0x08},
 ['*'] = {0x14, 0x08, 0x3E, 0x08, 0x14},
@@ -79,6 +86,7 @@ static const uint8_t font5x7[128][5] =
 ['>'] = {0x00, 0x41, 0x22, 0x14, 0x08},
 ['%'] = {0x23, 0x13, 0x08, 0x64, 0x62},
 ['_'] = {0x40, 0x40, 0x40, 0x40, 0x40},
+['|'] = {0x00, 0x00, 0x7F, 0x00, 0x00},
 
 ['0']={0x3E,0x51,0x49,0x45,0x3E},
 ['1']={0x00,0x42,0x7F,0x40,0x00},
@@ -155,14 +163,6 @@ const uint8_t kompressor_logo[NUM_ROWS][TOTAL_BYTES] = {
     {0x01, 0x2a, 0x8a, 0x2d, 0x04, 0x55, 0x60, 0x94, 0x54, 0x48, 0x00},
     {0x01, 0x2e, 0x8a, 0x25, 0xdd, 0xdd, 0x20, 0x97, 0x77, 0x48, 0x00},
 };
-
-const uint8_t buy_a_wd[NUM_ROWS][TOTAL_BYTES] = {
-		0xe4, 0xa4, 0x18, 0x22, 0x67, 0x75, 0x71, 0x8e, 0x81, 0x0c, 0x60, 0x94, 0xa4, 0x24, 0x22, 0x92,
-		0x45, 0x4a, 0x50, 0x83, 0x92, 0x90, 0x94, 0xa4, 0x24, 0x22, 0x92, 0x45, 0x4a, 0x50, 0x82, 0x02,
-		0x90, 0xe4, 0x9c, 0x3c, 0x22, 0xd2, 0x47, 0x4a, 0x56, 0x83, 0x84, 0x70, 0x94, 0x84, 0x24, 0x2a,
-		0xb2, 0x45, 0x4a, 0x52, 0x80, 0x88, 0x10, 0x94, 0xa4, 0x24, 0x2a, 0x92, 0x45, 0x4a, 0x52, 0x03,
-		0x90, 0x10, 0xe7, 0x98, 0x24, 0x14, 0x92, 0x75, 0x71, 0x8e, 0x81, 0x1e, 0x10
-	};
 
 /* ================= INTERNAL HELPERS ================= */
 
@@ -276,22 +276,22 @@ static inline void ShiftOutRow(const uint8_t *row_data)
  *   clamped to [0, ARR]
  */
 static const uint16_t brightness_lut[256] = {
-       0,  81,  81,  81,  81,  81,  82,  82,  82,  83,  83,  84,  84,  85,  85,  86,
-      87,  88,  88,  89,  90,  91,  92,  93,  94,  95,  96,  97,  98,  99, 100, 101,
-     102, 104, 105, 106, 108, 109, 110, 112, 113, 115, 116, 118, 119, 121, 123, 124,
-     126, 128, 129, 131, 133, 135, 137, 139, 141, 142, 144, 146, 148, 151, 153, 155,
-     157, 159, 161, 163, 166, 168, 170, 173, 175, 177, 180, 182, 184, 187, 189, 192,
-     195, 197, 200, 202, 205, 208, 210, 213, 216, 219, 221, 224, 227, 230, 233, 236,
-     239, 242, 245, 248, 251, 254, 257, 260, 263, 267, 270, 273, 276, 280, 283, 286,
-     289, 293, 296, 300, 303, 307, 310, 314, 317, 321, 324, 328, 332, 335, 339, 343,
-     346, 350, 354, 358, 361, 365, 369, 373, 377, 381, 385, 389, 393, 397, 401, 405,
-     409, 413, 417, 421, 426, 430, 434, 438, 443, 447, 451, 456, 460, 464, 469, 473,
-     478, 482, 487, 491, 496, 500, 505, 509, 514, 519, 523, 528, 533, 538, 542, 547,
-     552, 557, 562, 567, 571, 576, 581, 586, 591, 596, 601, 606, 611, 617, 622, 627,
-     632, 637, 642, 648, 653, 658, 663, 669, 674, 679, 685, 690, 696, 701, 706, 712,
-     717, 723, 728, 734, 740, 745, 751, 756, 762, 768, 774, 779, 785, 791, 797, 802,
-     808, 814, 820, 826, 832, 838, 844, 850, 856, 862, 868, 874, 880, 886, 892, 898,
-     904, 911, 917, 923, 929, 936, 942, 948, 955, 961, 967, 974, 980, 987, 993, 993,
+       0,   81,   82,   83,   84,   85,   86,   87,   88,   89,   91,   92,   94,   95,   97,   98,
+     100,  102,  103,  105,  107,  109,  110,  112,  114,  116,  118,  120,  122,  124,  126,  129,
+     131,  133,  135,  137,  140,  142,  144,  147,  149,  151,  154,  156,  159,  161,  164,  166,
+     169,  171,  174,  177,  179,  182,  184,  187,  190,  193,  195,  198,  201,  204,  207,  209,
+     212,  215,  218,  221,  224,  227,  230,  233,  236,  239,  242,  245,  248,  251,  254,  257,
+     260,  264,  267,  270,  273,  276,  279,  283,  286,  289,  293,  296,  299,  302,  306,  309,
+     313,  316,  319,  323,  326,  330,  333,  336,  340,  343,  347,  350,  354,  358,  361,  365,
+     368,  372,  375,  379,  383,  386,  390,  394,  397,  401,  405,  409,  412,  416,  420,  424,
+     427,  431,  435,  439,  443,  446,  450,  454,  458,  462,  466,  470,  474,  478,  482,  485,
+     489,  493,  497,  501,  505,  509,  513,  517,  522,  526,  530,  534,  538,  542,  546,  550,
+     554,  558,  563,  567,  571,  575,  579,  584,  588,  592,  596,  601,  605,  609,  613,  618,
+     622,  626,  631,  635,  639,  644,  648,  652,  657,  661,  665,  670,  674,  679,  683,  688,
+     692,  696,  701,  705,  710,  714,  719,  723,  728,  732,  737,  742,  746,  751,  755,  760,
+     764,  769,  774,  778,  783,  788,  792,  797,  802,  806,  811,  816,  820,  825,  830,  834,
+     839,  844,  849,  853,  858,  863,  868,  873,  877,  882,  887,  892,  897,  901,  906,  911,
+     916,  921,  926,  931,  936,  940,  945,  950,  955,  960,  965,  970,  975,  980,  985,  990,
 };
 
 /**
@@ -301,14 +301,13 @@ static const uint16_t brightness_lut[256] = {
 void Matrix_SetBrightness(uint8_t brightness)
 {
     if (brightness == 0) {
-        brightness_off = 1;
-        brightness_ccr = 0;
-        TIM3->CCR1 = 0;
+        pending_off = 1;
+        pending_ccr = 0;
     } else {
-        brightness_off = 0;
-        brightness_ccr = brightness_lut[brightness];
-        TIM3->CCR1 = brightness_ccr;
+        pending_off = 0;
+        pending_ccr = brightness_lut[brightness];
     }
+    ccr_pending = true;
 }
 
 uint8_t Matrix_GetBrightness(void)
@@ -464,6 +463,14 @@ void Matrix_TIM3_IRQHandler(void)
         /* Blank all rows immediately */
         GPIOA->BSRR = ALL_ROW_PINS;
 
+        /* Apply pending brightness change while all rows are OFF */
+        if (ccr_pending) {
+            brightness_off = pending_off;
+            brightness_ccr = pending_ccr;
+            TIM3->CCR1 = pending_ccr;
+            ccr_pending = false;
+        }
+
         /* Shift out data for current row */
         ShiftOutRow(display_buffer[current_row]);
 
@@ -484,6 +491,55 @@ void Matrix_TIM3_IRQHandler(void)
     }
 }
 
+/* ================= BATTERY ICON ================= */
+/*
+ * 15-column sprite. Each byte = 1 column, bit 0 = row 0 (top).
+ *
+ *   Col  0:     0x00  spacer
+ *   Col  1:     0x3E  left wall  (rows 1-5)
+ *   Col  2-11:  0x22  top/bottom border (rows 1,5) — fillable
+ *   Col 12:     0x3E  right wall (rows 1-5)
+ *   Col 13:     0x1C  nub (rows 2-4)
+ *   Col 14:     0x00  spacer
+ *
+ * Filling a bar = OR 0x1C (rows 2-4) onto columns 2-11.
+ */
+static const uint8_t battery_shell[15] = {
+    0x00, 0x3E, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
+    0x22, 0x22, 0x22, 0x22, 0x3E, 0x1C, 0x00
+};
+
+void Matrix_DrawBatteryIcon_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int col, uint8_t soc)
+{
+    /* 10 bars, thresholds: 5,15,25,35,45,55,65,75,85,95 */
+    uint8_t filled_bars = 0;
+    if (soc >= 5) {
+        filled_bars = (uint8_t)((soc - 5) / 10) + 1;
+        if (filled_bars > 10) filled_bars = 10;
+    }
+
+    for (int i = 0; i < 15; i++) {
+        uint8_t col_data = battery_shell[i];
+
+        /* Fill interior columns 2-11 */
+        if (i >= 2 && i <= 11) {
+            uint8_t bar_index = (uint8_t)(i - 2);
+            if (bar_index < filled_bars) {
+                col_data |= 0x1C;  /* rows 2,3,4 */
+            }
+        }
+
+        int dst_col = col + i;
+        if (dst_col < 0 || dst_col >= NUM_COLS) continue;
+
+        for (int r = 0; r < NUM_ROWS; r++) {
+            if (col_data & (1 << r)) {
+                set_pixel_buf(buf, r, dst_col, 1);
+            }
+        }
+    }
+}
+
 void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
                            const char *text, int *scroll_offset,
                            uint32_t speed_ms, uint32_t *last_scroll_tick)
@@ -501,4 +557,134 @@ void Matrix_ScrollText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row,
 
     int x = NUM_COLS - offset;
     Matrix_DrawText_Buf(buf, row, x, text);
+}
+
+int Matrix_TextPixelWidth(const char *text)
+{
+    return text_pixel_width(text);
+}
+
+void Matrix_DrawBatteryIcon_Blink_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES],
+                                       int col, uint8_t soc, uint8_t blink_bar)
+{
+    uint8_t filled_bars = 0;
+    if (soc >= 5) {
+        filled_bars = (uint8_t)((soc - 5) / 10) + 1;
+        if (filled_bars > 10) filled_bars = 10;
+    }
+
+    for (int i = 0; i < 15; i++) {
+        uint8_t col_data = battery_shell[i];
+
+        if (i >= 2 && i <= 11) {
+            uint8_t bar_index = (uint8_t)(i - 2);
+            if (bar_index < filled_bars || bar_index == blink_bar) {
+                col_data |= 0x1C;
+            }
+        }
+
+        int dst_col = col + i;
+        if (dst_col < 0 || dst_col >= NUM_COLS) continue;
+
+        for (int r = 0; r < NUM_ROWS; r++) {
+            if (col_data & (1 << r)) {
+                set_pixel_buf(buf, r, dst_col, 1);
+            }
+        }
+    }
+}
+
+/* =====================================================================
+ *  TINY 3x5 FONT — append this to the bottom of matrix.c
+ *
+ *  Each glyph is 3 columns wide, 5 rows tall.
+ *  Stored as 3 bytes per character: each byte is one column,
+ *  bit 0 = top row, bit 4 = bottom row.
+ * =====================================================================*/
+
+static const uint8_t tiny_font[][3] = {
+    /* [ 0] ' ' */ {0x00, 0x00, 0x00},
+    /* [ 1] A   */ {0x1E, 0x05, 0x1E},
+    /* [ 2] B   */ {0x1F, 0x15, 0x0A},
+    /* [ 3] C   */ {0x0E, 0x11, 0x11},
+    /* [ 4] D   */ {0x1F, 0x11, 0x0E},
+    /* [ 5] E   */ {0x1F, 0x15, 0x11},
+    /* [ 6] F   */ {0x1F, 0x05, 0x01},
+    /* [ 7] G   */ {0x0E, 0x11, 0x1D},
+    /* [ 8] H   */ {0x1F, 0x04, 0x1F},
+    /* [ 9] I   */ {0x11, 0x1F, 0x11},
+    /* [10] J   */ {0x08, 0x10, 0x0F},
+    /* [11] K   */ {0x1F, 0x04, 0x1B},
+    /* [12] L   */ {0x1F, 0x10, 0x10},
+    /* [13] M   */ {0x1F, 0x02, 0x1F},
+    /* [14] N   */ {0x1F, 0x01, 0x1F},
+    /* [15] O   */ {0x0E, 0x11, 0x0E},
+    /* [16] P   */ {0x1F, 0x05, 0x02},
+    /* [17] Q   */ {0x0E, 0x19, 0x1E},
+    /* [18] R   */ {0x1F, 0x05, 0x1A},
+    /* [19] S   */ {0x12, 0x15, 0x09},
+    /* [20] T   */ {0x01, 0x1F, 0x01},
+    /* [21] U   */ {0x0F, 0x10, 0x0F},
+    /* [22] V   */ {0x07, 0x18, 0x07},
+    /* [23] W   */ {0x1F, 0x08, 0x1F},
+    /* [24] X   */ {0x1B, 0x04, 0x1B},
+    /* [25] Y   */ {0x03, 0x1C, 0x03},
+    /* [26] Z   */ {0x19, 0x15, 0x13},
+    /* [27] 0   */ {0x0E, 0x11, 0x0E},
+    /* [28] 1   */ {0x12, 0x1F, 0x10},
+    /* [29] 2   */ {0x1A, 0x15, 0x12},
+    /* [30] 3   */ {0x11, 0x15, 0x0A},
+    /* [31] 4   */ {0x07, 0x04, 0x1F},
+    /* [32] 5   */ {0x17, 0x15, 0x09},
+    /* [33] 6   */ {0x0E, 0x15, 0x08},
+    /* [34] 7   */ {0x01, 0x19, 0x07},
+    /* [35] 8   */ {0x0A, 0x15, 0x0A},
+    /* [36] 9   */ {0x02, 0x15, 0x0E},
+    /* [37] :   */ {0x00, 0x0A, 0x00},
+};
+
+static int tiny_font_index(char c)
+{
+    if (c == ' ') return 0;
+    if (c >= 'A' && c <= 'Z') return 1 + (c - 'A');
+    if (c >= 'a' && c <= 'z') return 1 + (c - 'a');
+    if (c >= '0' && c <= '9') return 27 + (c - '0');
+    if (c == ':') return 37;
+    return 0;
+}
+
+void Matrix_DrawTinyChar_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, char c)
+{
+    int idx = tiny_font_index(c);
+    const uint8_t *glyph = tiny_font[idx];
+
+    for (int x = 0; x < 3; x++) {
+        uint8_t column = glyph[x];
+        for (int y = 0; y < 5; y++) {
+            if (column & (1 << y)) {
+                int r = row + y;
+                int cx = col + x;
+                if (r >= 0 && r < NUM_ROWS && cx >= 0 && cx < NUM_COLS) {
+                    buf[r][cx / 8] |= (1 << (cx % 8));
+                }
+            }
+        }
+    }
+}
+
+void Matrix_DrawTinyText_Buf(uint8_t buf[NUM_ROWS][TOTAL_BYTES], int row, int col, const char *text)
+{
+    while (*text) {
+        Matrix_DrawTinyChar_Buf(buf, row, col, *text);
+        col += 4; /* 3px glyph + 1px gap */
+        text++;
+    }
+}
+
+int Matrix_TinyTextPixelWidth(const char *text)
+{
+    int len = 0;
+    while (*text) { len++; text++; }
+    if (len == 0) return 0;
+    return len * 4 - 1; /* 3px per char + 1px gap, minus trailing gap */
 }

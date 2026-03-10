@@ -192,16 +192,26 @@ void Countdown_Update(void)
 void Countdown_OnPress(void)
 {
     switch (cd_state) {
-        case CD_STATE_IDLE:
-            cd_state = CD_STATE_SETTING;
-            cd_field = CD_FIELD_HOURS;
-            cd_set_hours   = cd_last_hours;
-            cd_set_minutes = cd_last_minutes;
-            cd_set_seconds = cd_last_seconds;
-            cd_blink_on = true;
-            cd_blink_tick = HAL_GetTick();
+        case CD_STATE_IDLE: {
+            /* Press from idle -> start running with last set time */
+            uint32_t total_ms = ((uint32_t)cd_last_hours * 3600 +
+                                 (uint32_t)cd_last_minutes * 60 +
+                                 (uint32_t)cd_last_seconds) * 1000;
+
+            if (total_ms == 0) {
+                Buzzer_BeepDouble();
+                cd_dirty = true;
+                return;
+            }
+
+            cd_remaining_ms = total_ms;
+            cd_last_tick = HAL_GetTick();
+            cd_last_sec = 0xFF;
+            cd_state = CD_STATE_RUNNING;
+            Buzzer_BeepShort();
             cd_dirty = true;
             break;
+        }
 
         case CD_STATE_SETTING:
             if (cd_field < CD_FIELD_SECONDS) {
@@ -210,26 +220,12 @@ void Countdown_OnPress(void)
                 cd_blink_tick = HAL_GetTick();
                 cd_dirty = true;
             } else {
-                uint32_t total_ms = ((uint32_t)cd_set_hours * 3600 +
-                                     (uint32_t)cd_set_minutes * 60 +
-                                     (uint32_t)cd_set_seconds) * 1000;
-
-                if (total_ms == 0) {
-                    Buzzer_BeepDouble();
-                    cd_field = CD_FIELD_HOURS;
-                    cd_dirty = true;
-                    return;
-                }
-
                 cd_last_hours   = cd_set_hours;
                 cd_last_minutes = cd_set_minutes;
                 cd_last_seconds = cd_set_seconds;
 
-                cd_remaining_ms = total_ms;
-                cd_last_tick = HAL_GetTick();
-                cd_last_sec = 0xFF;
-                cd_state = CD_STATE_RUNNING;
-                Buzzer_BeepShort();
+                cd_state = CD_STATE_IDLE;
+                Buzzer_BeepDouble();
                 cd_dirty = true;
             }
             break;
@@ -294,10 +290,21 @@ void Countdown_OnScroll(int direction)
 
 void Countdown_OnLongPress(void)
 {
-    if (cd_state == CD_STATE_PAUSED || cd_state == CD_STATE_RUNNING ||
-        cd_state == CD_STATE_SETTING) {
+    if (cd_state == CD_STATE_RUNNING || cd_state == CD_STATE_PAUSED) {
+        /* Hold while running/paused -> end timer, go to idle */
         cd_state = CD_STATE_IDLE;
         cd_remaining_ms = 0;
+        cd_dirty = true;
+        Buzzer_BeepShort();
+    } else if (cd_state == CD_STATE_IDLE) {
+        /* Hold from idle -> enter setting mode */
+        cd_state = CD_STATE_SETTING;
+        cd_field = CD_FIELD_HOURS;
+        cd_set_hours   = cd_last_hours;
+        cd_set_minutes = cd_last_minutes;
+        cd_set_seconds = cd_last_seconds;
+        cd_blink_on = true;
+        cd_blink_tick = HAL_GetTick();
         cd_dirty = true;
         Buzzer_BeepShort();
     }

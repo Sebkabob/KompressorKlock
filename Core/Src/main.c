@@ -4,7 +4,7 @@
 *	Kompressor Klock
 *	Sebastian Forenza 2026
 *
-*	Code mostly written by Claude I can't lie
+*	Version 1.0
 *
   *
   ******************************************************************************
@@ -15,13 +15,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "matrix.h"
-#include "sensor_manager.h"
-#include "screens.h"
-#include "screen_impl.h"
-#include "rotary.h"
-#include "buzzer.h"
-#include "timer_app.h"
+#include "app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,7 +25,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-extern I2C_HandleTypeDef hi2c1;
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,9 +40,7 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-static int scroll_screen_index = -1;
-static int stopwatch_screen_index = -1;
-static int countdown_screen_index = -1;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,7 +66,27 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	  /* Force row pins HIGH (off) immediately — before HAL_Init or GPIO config.
+	   * This prevents the LED matrix from showing stale shift register data
+	   * during the brief window where MX_GPIO_Init configures pin modes.
+	   */
+	  RCC->IOPENR |= RCC_IOPENR_GPIOAEN;
+	  (void)RCC->IOPENR;
 
+	  GPIOA->MODER = (GPIOA->MODER
+	    & ~(GPIO_MODER_MODE3_Msk | GPIO_MODER_MODE4_Msk | GPIO_MODER_MODE5_Msk
+	      | GPIO_MODER_MODE6_Msk | GPIO_MODER_MODE7_Msk | GPIO_MODER_MODE8_Msk
+	      | GPIO_MODER_MODE11_Msk))
+	    | (0x01 << GPIO_MODER_MODE3_Pos)
+	    | (0x01 << GPIO_MODER_MODE4_Pos)
+	    | (0x01 << GPIO_MODER_MODE5_Pos)
+	    | (0x01 << GPIO_MODER_MODE6_Pos)
+	    | (0x01 << GPIO_MODER_MODE7_Pos)
+	    | (0x01 << GPIO_MODER_MODE8_Pos)
+	    | (0x01 << GPIO_MODER_MODE11_Pos);
+
+	  GPIOA->BSRR = A1_Pin | A2_Pin | A3_Pin | A4_Pin
+	               | A5_Pin | A6_Pin | A7_Pin;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -99,53 +111,7 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-
-  // Initialize display
-  Matrix_Init();
-
-  Rotary_Init();
-
-  HAL_TIM_Base_Start_IT(&htim3);
-
-  HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_1);
-
-  // Initialize all sensors
-    SensorManager_Init(&hi2c1);
-
-    // Initialize screen manager and register screens
-    Screen_Init();                                    // ← must come first
-
-    Screen_Register(Screen_Logo);
-    Screen_Register(Screen_Time);
-    Screen_Register(Screen_TimeTempHumid);
-    Screen_Register(Screen_Battery);
-    Screen_Register(Screen_TimeDate);
-    Screen_Register(Screen_TimeTempBatt);
-
-    /* Register interactive timer screens (AFTER Screen_Init!) */
-    stopwatch_screen_index = Screen_Register(Screen_Stopwatch);
-    countdown_screen_index = Screen_Register(Screen_Countdown);
-
-    /* Tell rotary which screens are interactive */
-    Rotary_SetStopwatchScreenIndex(stopwatch_screen_index);
-    Rotary_SetCountdownScreenIndex(countdown_screen_index);
-
-    /* Initialize buzzer (PC6) */
-    Buzzer_Init();
-
-    /* Initialize timer apps */
-    Stopwatch_Init();
-    Countdown_Init();
-
-//   Screen_Register(Screen_LightDebug);
-//   Screen_Register(Screen_Logo2);
-//   Screen_Register(Screen_Battery2);
-//   Screen_Register(Screen_TimeLight);
-
-
-//  Screen_SetAutoCycle(false);
-//  Screen_SetAutoCycleTransition(TRANSITION_DISSOLVE);
-
+  App_Init(&hi2c1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -155,41 +121,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-	    // Update all sensor readings
-	    SensorManager_Update();
-
-	    /* Update timer apps */
-	    Stopwatch_Update();
-	    Countdown_Update();
-
-	    /* Update buzzer (non-blocking beep patterns) */
-	    Buzzer_Update();
-
-	    /* Mark timer screens dirty when they need redraw */
-	    if (Screen_GetCurrent() == stopwatch_screen_index && Stopwatch_NeedsRedraw()) {
-	        Screen_MarkDirty();
-	    }
-	    if (Screen_GetCurrent() == countdown_screen_index && Countdown_NeedsRedraw()) {
-	        Screen_MarkDirty();
-	    }
-
-	    Rotary_Update();
-
-	    // Mark screen dirty if sensor data changed
-	    if (SensorManager_HasChanged()) {
-	        Screen_MarkDirty();
-	    }
-
-	    // Keep scroll screen continuously dirty (it needs constant updates)
-	    if (Screen_GetCurrent() == scroll_screen_index) {
-	        Screen_MarkDirty();
-	    }
-
-	    // Drive screen state machine
-	    Screen_Update();
-
-	    HAL_Delay(5);
+	  App_Update();
   }
   /* USER CODE END 3 */
 }

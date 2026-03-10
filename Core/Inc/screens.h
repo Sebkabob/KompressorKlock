@@ -20,14 +20,20 @@ typedef enum {
 typedef void (*ScreenRenderFunc_t)(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
 /* ================= CONFIGURATION ================= */
-#define MAX_SCREENS              12
+#define MAX_SCREENS              16
 #define AUTO_CYCLE_INTERVAL_MS   10000
 
-// Time-based transition speeds (in milliseconds)
-// These are constant regardless of timer period / brightness
-#define SLIDE_H_DURATION_MS      500   // Horizontal slide total time
-#define SLIDE_V_DURATION_MS      400   // Vertical slide total time
-#define DISSOLVE_PHASE_MS        200   // Each dissolve phase (out + in)
+/* ================= TRANSITION SPEED ================= */
+typedef enum {
+    TRANSITION_SPEED_SLOW = 0,
+    TRANSITION_SPEED_NORMAL,
+    TRANSITION_SPEED_FAST,
+    TRANSITION_SPEED_FASTEST,
+    TRANSITION_SPEED_COUNT
+} TransitionSpeed_t;
+
+void Screen_SetTransitionSpeed(TransitionSpeed_t speed);
+TransitionSpeed_t Screen_GetTransitionSpeed(void);
 
 /* ================= PUBLIC API ================= */
 
@@ -56,6 +62,13 @@ void Screen_EnterSettings(void);
 void Screen_ExitSettings(void);
 
 void Screen_SetCurrent(int index);
+
+/**
+ * @brief Boot dissolve: transitions from the boot logo into the
+ *        current screen with a dissolve effect.
+ *        Call after Screen_SetCurrent().
+ */
+void Screen_BootDissolve(void);
 
 
 #endif // SCREENS_H

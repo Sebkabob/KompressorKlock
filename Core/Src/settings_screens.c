@@ -1,6 +1,8 @@
 #include "settings_screens.h"
+#include "settings.h"
 #include "sensor_manager.h"
 #include "rtc_rv3032.h"
+#include "screens.h"
 #include "main.h"
 #include <string.h>
 #include <stdio.h>
@@ -9,6 +11,10 @@
 
 /* =====================================================================
  *  TIME SET
+ *
+ *  Left-justified time fields, OK right-justified on same screen.
+ *  When editing time fields, OK shows on the right.
+ *  When on OK field, OK blinks.
  * =====================================================================*/
 
 static uint8_t ts_hour;
@@ -24,10 +30,15 @@ void TimeSetting_Enter(void)
 {
     const SensorData_t *data = SensorManager_GetData();
 
-    ts_hour   = data->hours_12;
+    if (Settings_Is24Hour()) {
+        ts_hour   = data->hours_24;
+        ts_is_pm  = false;
+    } else {
+        ts_hour   = data->hours_12;
+        ts_is_pm  = (data->hours_24 >= 12);
+    }
     ts_minute = data->minutes;
     ts_second = data->seconds;
-    ts_is_pm  = (data->hours_24 >= 12);
 
     ts_field = TIME_FIELD_HOUR;
     ts_blink_tick = HAL_GetTick();
@@ -38,32 +49,36 @@ void TimeSetting_OnScroll(int direction)
 {
     switch (ts_field) {
         case TIME_FIELD_HOUR:
-            if (direction > 0) {
-                ts_hour++;
-                if (ts_hour > 12) ts_hour = 1;
+            if (Settings_Is24Hour()) {
+                if (direction > 0) {
+                    ts_hour = (ts_hour >= 23) ? 0 : ts_hour + 1;
+                } else {
+                    ts_hour = (ts_hour == 0) ? 23 : ts_hour - 1;
+                }
             } else {
-                ts_hour--;
-                if (ts_hour < 1) ts_hour = 12;
+                if (direction > 0) {
+                    ts_hour++;
+                    if (ts_hour > 12) ts_hour = 1;
+                } else {
+                    ts_hour--;
+                    if (ts_hour < 1) ts_hour = 12;
+                }
             }
             break;
 
         case TIME_FIELD_MINUTE:
             if (direction > 0) {
-                ts_minute++;
-                if (ts_minute > 59) ts_minute = 0;
+                ts_minute = (ts_minute >= 59) ? 0 : ts_minute + 1;
             } else {
-                if (ts_minute == 0) ts_minute = 59;
-                else ts_minute--;
+                ts_minute = (ts_minute == 0) ? 59 : ts_minute - 1;
             }
             break;
 
         case TIME_FIELD_SECOND:
             if (direction > 0) {
-                ts_second++;
-                if (ts_second > 59) ts_second = 0;
+                ts_second = (ts_second >= 59) ? 0 : ts_second + 1;
             } else {
-                if (ts_second == 0) ts_second = 59;
-                else ts_second--;
+                ts_second = (ts_second == 0) ? 59 : ts_second - 1;
             }
             break;
 
@@ -86,16 +101,25 @@ bool TimeSetting_OnPress(void)
 {
     if (ts_field < TIME_FIELD_OK) {
         ts_field++;
+        /* In 24hr mode, skip AM/PM field */
+        if (Settings_Is24Hour() && ts_field == TIME_FIELD_AMPM) {
+            ts_field = TIME_FIELD_OK;
+        }
         ts_blink_on = true;
         ts_blink_tick = HAL_GetTick();
         return false;
     }
 
+    /* OK pressed — commit time */
     uint8_t hours_24;
-    if (ts_is_pm) {
-        hours_24 = (ts_hour == 12) ? 12 : ts_hour + 12;
+    if (Settings_Is24Hour()) {
+        hours_24 = ts_hour;
     } else {
-        hours_24 = (ts_hour == 12) ? 0 : ts_hour;
+        if (ts_is_pm) {
+            hours_24 = (ts_hour == 12) ? 12 : ts_hour + 12;
+        } else {
+            hours_24 = (ts_hour == 12) ? 0 : ts_hour;
+        }
     }
 
     RV3032_SetTime(ts_second, ts_minute, hours_24,
@@ -109,19 +133,7 @@ void TimeSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
 
-    if (ts_field == TIME_FIELD_OK) {
-        if (ts_blink_on) {
-            Matrix_DrawTextCentered_Buf(buf, 0, "OK");
-        } else {
-            Matrix_DrawTextCentered_Buf(buf, 0, "__");
-        }
-        return;
-    }
-
-    char hour_str[4];
-    char min_str[4];
-    char sec_str[4];
-    char ampm_display[4];
+    char hour_str[4], min_str[4], sec_str[4];
 
     if (ts_field == TIME_FIELD_HOUR && !ts_blink_on) {
         sprintf(hour_str, "__");
@@ -141,14 +153,29 @@ void TimeSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         sprintf(sec_str, "%02d", ts_second);
     }
 
-    if (ts_field == TIME_FIELD_AMPM && !ts_blink_on) {
-        sprintf(ampm_display, "__");
+    if (Settings_Is24Hour()) {
+        sprintf(str, "%s:%s:%s", hour_str, min_str, sec_str);
     } else {
-        sprintf(ampm_display, "%s", ts_is_pm ? "pm" : "am");
+        char ampm_str[4];
+        if (ts_field == TIME_FIELD_AMPM && !ts_blink_on) {
+            sprintf(ampm_str, "__");
+        } else {
+            sprintf(ampm_str, "%s", ts_is_pm ? "pm" : "am");
+        }
+        sprintf(str, "%s:%s:%s%s", hour_str, min_str, sec_str, ampm_str);
     }
 
-    sprintf(str, "%s:%s:%s%s", hour_str, min_str, sec_str, ampm_display);
-    Matrix_DrawTextCentered_Buf(buf, 0, str);
+    /* Left-justify the time */
+    Matrix_DrawText_Buf(buf, 0, 0, str);
+
+    /* Right-justify OK — blink when selected */
+    if (ts_field == TIME_FIELD_OK) {
+        if (ts_blink_on) {
+            Matrix_DrawTextRight_Buf(buf, 0, "OK");
+        }
+    } else {
+        Matrix_DrawTextRight_Buf(buf, 0, "OK");
+    }
 }
 
 bool TimeSetting_NeedsRedraw(void)
@@ -169,6 +196,8 @@ bool TimeSetting_IsOnOK(void)
 
 /* =====================================================================
  *  DATE SET
+ *
+ *  No OK screen — auto-returns after the last field (year) is pressed.
  * =====================================================================*/
 
 typedef enum {
@@ -176,7 +205,6 @@ typedef enum {
     DATE_FIELD_MONTH,
     DATE_FIELD_DATE,
     DATE_FIELD_YEAR,
-    DATE_FIELD_OK,
     DATE_FIELD_COUNT
 } DateField_t;
 
@@ -189,7 +217,6 @@ static DateField_t ds_field;
 static uint32_t ds_blink_tick;
 static bool     ds_blink_on;
 
-/* RV3032 weekday: 0=Sunday, 1=Monday, ... 6=Saturday */
 static const char *weekday_names_short[] = {
     "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
@@ -234,21 +261,17 @@ void DateSetting_OnScroll(int direction)
     switch (ds_field) {
         case DATE_FIELD_WEEKDAY:
             if (direction > 0) {
-                ds_weekday++;
-                if (ds_weekday > 6) ds_weekday = 0;
+                ds_weekday = (ds_weekday >= 6) ? 0 : ds_weekday + 1;
             } else {
-                if (ds_weekday == 0) ds_weekday = 6;
-                else ds_weekday--;
+                ds_weekday = (ds_weekday == 0) ? 6 : ds_weekday - 1;
             }
             break;
 
         case DATE_FIELD_MONTH:
             if (direction > 0) {
-                ds_month++;
-                if (ds_month > 12) ds_month = 1;
+                ds_month = (ds_month >= 12) ? 1 : ds_month + 1;
             } else {
-                ds_month--;
-                if (ds_month < 1) ds_month = 12;
+                ds_month = (ds_month <= 1) ? 12 : ds_month - 1;
             }
             clamp_date();
             break;
@@ -256,27 +279,20 @@ void DateSetting_OnScroll(int direction)
         case DATE_FIELD_DATE: {
             uint8_t max = days_in_month(ds_month, ds_year);
             if (direction > 0) {
-                ds_date++;
-                if (ds_date > max) ds_date = 1;
+                ds_date = (ds_date >= max) ? 1 : ds_date + 1;
             } else {
-                if (ds_date <= 1) ds_date = max;
-                else ds_date--;
+                ds_date = (ds_date <= 1) ? max : ds_date - 1;
             }
             break;
         }
 
         case DATE_FIELD_YEAR:
             if (direction > 0) {
-                ds_year++;
-                if (ds_year > 2099) ds_year = 2000;
+                ds_year = (ds_year >= 2099) ? 2000 : ds_year + 1;
             } else {
-                if (ds_year <= 2000) ds_year = 2099;
-                else ds_year--;
+                ds_year = (ds_year <= 2000) ? 2099 : ds_year - 1;
             }
             clamp_date();
-            break;
-
-        case DATE_FIELD_OK:
             break;
 
         default:
@@ -289,13 +305,14 @@ void DateSetting_OnScroll(int direction)
 
 bool DateSetting_OnPress(void)
 {
-    if (ds_field < DATE_FIELD_OK) {
+    if (ds_field < DATE_FIELD_YEAR) {
         ds_field++;
         ds_blink_on = true;
         ds_blink_tick = HAL_GetTick();
         return false;
     }
 
+    /* Last field pressed — commit and return */
     const SensorData_t *data = SensorManager_GetData();
     RV3032_SetTime(data->seconds, data->minutes, data->hours_24,
                    ds_weekday, ds_date, ds_month, ds_year);
@@ -307,19 +324,7 @@ void DateSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
 
-    if (ds_field == DATE_FIELD_OK) {
-        if (ds_blink_on) {
-            Matrix_DrawTextCentered_Buf(buf, 0, "OK");
-        } else {
-            Matrix_DrawTextCentered_Buf(buf, 0, "__");
-        }
-        return;
-    }
-
-    char wday_str[5];
-    char mon_str[5];
-    char date_str[4];
-    char year_str[6];
+    char wday_str[5], mon_str[5], date_str[4], year_str[6];
 
     if (ds_field == DATE_FIELD_WEEKDAY && !ds_blink_on) {
         sprintf(wday_str, "___");
@@ -362,25 +367,18 @@ bool DateSetting_NeedsRedraw(void)
 
 bool DateSetting_IsOnOK(void)
 {
-    return ds_field == DATE_FIELD_OK;
+    return (ds_field == DATE_FIELD_YEAR);
 }
 
 /* =====================================================================
  *  BRIGHTNESS
+ *
+ *  No OK screen. No blinking. Scroll to adjust, press to confirm.
  * =====================================================================*/
-
-typedef enum {
-    BRIGHT_FIELD_VALUE = 0,
-    BRIGHT_FIELD_OK,
-} BrightField_t;
 
 #define BRIGHT_AUTO  0
 
 static int bright_value;
-static BrightField_t bright_field;
-
-static uint32_t bright_blink_tick;
-static bool     bright_blink_on;
 
 void BrightnessSetting_Enter(void)
 {
@@ -389,16 +387,10 @@ void BrightnessSetting_Enter(void)
     } else {
         bright_value = SensorManager_GetManualBrightnessPercent();
     }
-
-    bright_field = BRIGHT_FIELD_VALUE;
-    bright_blink_tick = HAL_GetTick();
-    bright_blink_on = true;
 }
 
 void BrightnessSetting_OnScroll(int direction)
 {
-    if (bright_field == BRIGHT_FIELD_OK) return;
-
     bright_value += direction;
     if (bright_value < 0) bright_value = 100;
     if (bright_value > 100) bright_value = 0;
@@ -410,20 +402,10 @@ void BrightnessSetting_OnScroll(int direction)
         SensorManager_SetAutoBrightness(false);
         SensorManager_SetManualBrightnessPercent((uint8_t)bright_value);
     }
-
-    bright_blink_on = true;
-    bright_blink_tick = HAL_GetTick();
 }
 
 bool BrightnessSetting_OnPress(void)
 {
-    if (bright_field < BRIGHT_FIELD_OK) {
-        bright_field++;
-        bright_blink_on = true;
-        bright_blink_tick = HAL_GetTick();
-        return false;
-    }
-
     /* Already applied from live preview */
     return true;
 }
@@ -432,39 +414,155 @@ void BrightnessSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     char str[32];
 
-    if (bright_field == BRIGHT_FIELD_OK) {
-        if (bright_blink_on) {
-            Matrix_DrawTextCentered_Buf(buf, 0, "OK");
-        } else {
-            Matrix_DrawTextCentered_Buf(buf, 0, "__");
-        }
-        return;
-    }
-
-    if (bright_blink_on) {
-        if (bright_value == BRIGHT_AUTO) {
-            sprintf(str, "Auto");
-        } else {
-            sprintf(str, "%03d%%", bright_value);
-        }
+    if (bright_value == BRIGHT_AUTO) {
+        sprintf(str, "Auto");
     } else {
-        sprintf(str, "____");
+        sprintf(str, "%d%%", bright_value);
     }
     Matrix_DrawTextCentered_Buf(buf, 0, str);
 }
 
 bool BrightnessSetting_NeedsRedraw(void)
 {
-    uint32_t now = HAL_GetTick();
-    if (now - bright_blink_tick >= BLINK_INTERVAL_MS) {
-        bright_blink_on = !bright_blink_on;
-        bright_blink_tick = now;
-        return true;
-    }
     return false;
 }
 
 bool BrightnessSetting_IsOnOK(void)
 {
-    return bright_field == BRIGHT_FIELD_OK;
+    return true;
+}
+
+/* =====================================================================
+ *  TIMEZONE SETTING
+ *
+ *  Scroll through timezone list. Shows city code + UTC offset.
+ *  Press to confirm. Saved to EEPROM.
+ *
+ *  Display: "NYC UTC-5" or "DEL UTC+5:30"
+ *
+ *  DST-aware zones show a '*' suffix when DST applies, but the
+ *  stored offset is always the standard offset. DST adjustment
+ *  is computed dynamically in world_clock.c based on the current
+ *  date from the RTC.
+ * =====================================================================*/
+
+/* Timezone table — must match the one in settings.c and world_clock.c */
+static const char * const tzs_labels[] = {
+    "BKR", "SST", "HNL", "ANC", "LAX", "DEN", "CHI", "NYC",
+    "CCS", "GRU", "GSI", "CVT", "LON", "PAR", "CAI", "MSK",
+    "DXB", "DEL", "KTM", "DAC", "BKK", "SGP", "TKY", "SYD",
+    "NOU", "AKL"
+};
+
+static const int8_t tzs_offsets[] = {
+    -48, -44, -40, -36, -32, -28, -24, -20,
+    -16, -12,  -8,  -4,   0,   4,   8,  12,
+     16,  22,  23,  24,  28,  32,  36,  40,
+     44,  48
+};
+
+#define TZS_COUNT  (sizeof(tzs_offsets) / sizeof(tzs_offsets[0]))
+
+static int tzs_index;  /* currently selected index during editing */
+
+void TimezoneSetting_Enter(void)
+{
+    tzs_index = (int)Settings_GetHomeTimezoneIndex();
+}
+
+void TimezoneSetting_OnScroll(int direction)
+{
+    tzs_index += direction;
+    if (tzs_index < 0) tzs_index = (int)TZS_COUNT - 1;
+    if (tzs_index >= (int)TZS_COUNT) tzs_index = 0;
+}
+
+bool TimezoneSetting_OnPress(void)
+{
+    /* Commit the selection */
+    Settings_SetHomeTimezoneIndex((uint8_t)tzs_index);
+    return true;  /* done editing, return to menu */
+}
+
+void TimezoneSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    char str[32];
+    int8_t off_q = tzs_offsets[tzs_index];
+
+    /* Convert quarter-hours to hours:minutes */
+    int abs_q = (off_q < 0) ? -off_q : off_q;
+    int hours = abs_q / 4;
+    int mins  = (abs_q % 4) * 15;
+    char sign = (off_q < 0) ? '-' : '+';
+
+    if (mins != 0) {
+        sprintf(str, "%s %c%d:%02d", tzs_labels[tzs_index], sign, hours, mins);
+    } else {
+        sprintf(str, "%s %c%d", tzs_labels[tzs_index], sign, hours);
+    }
+
+    Matrix_DrawTextCentered_Buf(buf, 0, str);
+}
+
+bool TimezoneSetting_NeedsRedraw(void)
+{
+    return false;
+}
+
+bool TimezoneSetting_IsOnOK(void)
+{
+    /* Instant confirm on press — same as brightness */
+    return true;
+}
+
+/* =====================================================================
+ *  TRANSITIONS
+ *
+ *  Scroll through speed options. Live preview. Press to confirm.
+ * =====================================================================*/
+
+static TransitionSpeed_t trans_value;
+
+static const char * const speed_labels[TRANSITION_SPEED_COUNT] = {
+    "Slow",
+    "Normal",
+    "Fast",
+    "Fastest"
+};
+
+void TransitionSetting_Enter(void)
+{
+    trans_value = Screen_GetTransitionSpeed();
+}
+
+void TransitionSetting_OnScroll(int direction)
+{
+    int v = (int)trans_value + direction;
+    if (v < 0) v = (int)TRANSITION_SPEED_COUNT - 1;
+    if (v >= (int)TRANSITION_SPEED_COUNT) v = 0;
+    trans_value = (TransitionSpeed_t)v;
+
+    /* Live preview */
+    Screen_SetTransitionSpeed(trans_value);
+}
+
+bool TransitionSetting_OnPress(void)
+{
+    /* Already applied from live preview */
+    return true;
+}
+
+void TransitionSetting_Render(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    Matrix_DrawTextCentered_Buf(buf, 0, speed_labels[trans_value]);
+}
+
+bool TransitionSetting_NeedsRedraw(void)
+{
+    return false;
+}
+
+bool TransitionSetting_IsOnOK(void)
+{
+    return true;
 }
