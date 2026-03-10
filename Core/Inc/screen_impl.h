@@ -35,4 +35,8 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_Battery_Toggle(void);
 bool Screen_Battery_IsAlt(void);
 
+/* ================= CONWAY SPEED CONTROL ================= */
+
+void Screen_Conway_CycleSpeed(void);
+
 #endif // SCREEN_IMPL_H

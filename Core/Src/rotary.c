@@ -25,11 +25,13 @@ static int stopwatch_screen_index  = -1;
 static int countdown_screen_index  = -1;
 static int worldclock_screen_index = -1;
 static int battery_screen_index    = -1;
+static int conway_screen_index     = -1;
 
 void Rotary_SetStopwatchScreenIndex(int idx)  { stopwatch_screen_index = idx; }
 void Rotary_SetCountdownScreenIndex(int idx)  { countdown_screen_index = idx; }
 void Rotary_SetWorldClockScreenIndex(int idx) { worldclock_screen_index = idx; }
 void Rotary_SetBatteryScreenIndex(int idx)    { battery_screen_index = idx; }
+void Rotary_SetConwayScreenIndex(int idx)     { conway_screen_index = idx; }
 
 static bool on_stopwatch_screen(void)
 {
@@ -49,6 +51,11 @@ static bool on_worldclock_screen(void)
 static bool on_battery_screen(void)
 {
     return (Screen_GetCurrent() == battery_screen_index && battery_screen_index >= 0);
+}
+
+static bool on_conway_screen(void)
+{
+    return (Screen_GetCurrent() == conway_screen_index && conway_screen_index >= 0);
 }
 
 static bool on_timer_screen(void)
@@ -275,8 +282,10 @@ void Rotary_Update(void)
                             Settings_OnPress();
                             Screen_MarkDirty();
                         } else if (on_battery_screen()) {
-                            /* Toggle between normal and alt battery view */
                             Screen_Battery_Toggle();
+                            Screen_MarkDirty();
+                        } else if (on_conway_screen()) {
+                            Screen_Conway_CycleSpeed();
                             Screen_MarkDirty();
                         } else if (on_stopwatch_screen()) {
                             Stopwatch_OnPress();

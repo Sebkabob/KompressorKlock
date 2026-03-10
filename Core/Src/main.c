@@ -208,6 +208,7 @@ int main(void)
   /* ---- ANIMATED SCREENS ---- */
   pixelrain_screen_index = Screen_Register(Screen_PixelRain);
   conway_screen_index = Screen_Register(Screen_Conway);
+  Rotary_SetConwayScreenIndex(conway_screen_index);
   snake_screen_index = Screen_Register(Screen_Snake);
 
   /* ---- UTILITY SCREENS ---- */

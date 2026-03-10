@@ -547,24 +547,53 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 /* =====================================================================
  *  CONWAY'S GAME OF LIFE
  *
- *  Full 7x84 grid. Evolves every ~150ms. Time is overlaid in the
- *  center with a 2px cleared border. The simulation reseeds
- *  automatically if it stagnates (identical to previous generation)
- *  or if the population drops too low.
+ *  Full 7x84 toroidal grid. Time overlaid in center.
+ *
+ *  Anti-stagnation strategy:
+ *    - Tracks 3 previous generations to catch period-1/2/3 oscillators
+ *    - Monitors population: if it barely changes for 8 gens, inject chaos
+ *    - Hard age limit: full reseed after ~12 seconds of same generation
+ *    - "Inject" mode: instead of full reseed, sprinkle random cells into
+ *      a region to create new activity while preserving existing patterns
+ *    - Population floor: reseed if population drops below 10
+ *
+ *  Click to cycle speed: Slow (250ms) -> Normal (150ms) -> Fast (60ms).
  * =====================================================================*/
 
 #define GOL_ROWS  NUM_ROWS
 #define GOL_COLS  NUM_COLS
 
 static uint8_t gol_grid[GOL_ROWS][TOTAL_BYTES];
-static uint8_t gol_prev[GOL_ROWS][TOTAL_BYTES];
+static uint8_t gol_hist[3][GOL_ROWS][TOTAL_BYTES];  /* 3 previous generations */
 static bool    gol_inited = false;
 static uint32_t gol_last_tick = 0;
 static uint16_t gol_rng = 0xCAFE;
-static uint8_t  gol_stale_count = 0;
 
-#define GOL_STEP_MS       150
-#define GOL_STALE_LIMIT   3
+/* Stagnation tracking */
+static uint16_t gol_gen_count = 0;       /* generations since last seed/inject */
+static int      gol_prev_pop = 0;        /* population last gen */
+static uint8_t  gol_stable_pop_count = 0;/* consecutive gens with similar pop */
+
+/* Speed: 0=Slow, 1=Normal, 2=Fast */
+static uint8_t gol_speed_idx = 1;
+static const uint16_t gol_speed_ms[] = { 500, 150, 100 };
+static const char * const gol_speed_names[] = { "Slow", "Norm", "Fast" };
+
+#define GOL_SPEED_COUNT      3
+#define GOL_POP_FLOOR        3    /* only reseed if nearly dead */
+#define GOL_STABLE_LIMIT    16    /* be patient — let it settle before injecting */
+#define GOL_MAX_AGE        200    /* full reseed after ~30s at normal speed */
+#define GOL_INJECT_CELLS    12    /* gentle nudge, not a bomb */
+
+/* Brief overlay when speed changes */
+static uint32_t gol_speed_show_tick = 0;
+#define GOL_SPEED_SHOW_MS  800
+
+void Screen_Conway_CycleSpeed(void)
+{
+    gol_speed_idx = (gol_speed_idx + 1) % GOL_SPEED_COUNT;
+    gol_speed_show_tick = HAL_GetTick();
+}
 
 static uint8_t gol_rand8(void)
 {
@@ -576,7 +605,6 @@ static uint8_t gol_rand8(void)
 
 static inline uint8_t gol_get(const uint8_t grid[][TOTAL_BYTES], int r, int c)
 {
-    /* Toroidal wrap */
     if (r < 0) r += GOL_ROWS;
     if (r >= GOL_ROWS) r -= GOL_ROWS;
     if (c < 0) c += GOL_COLS;
@@ -592,21 +620,6 @@ static inline void gol_set(uint8_t grid[][TOTAL_BYTES], int r, int c, uint8_t v)
         grid[r][c / 8] &= ~(1 << (c % 8));
 }
 
-static void gol_seed(void)
-{
-    gol_rng ^= (uint16_t)HAL_GetTick();
-    memset(gol_grid, 0, sizeof(gol_grid));
-    for (int r = 0; r < GOL_ROWS; r++) {
-        for (int c = 0; c < GOL_COLS; c++) {
-            if ((gol_rand8() % 4) == 0) {  /* ~25% density */
-                gol_set(gol_grid, r, c, 1);
-            }
-        }
-    }
-    memset(gol_prev, 0, sizeof(gol_prev));
-    gol_stale_count = 0;
-}
-
 static int gol_population(void)
 {
     int count = 0;
@@ -617,6 +630,48 @@ static int gol_population(void)
         }
     }
     return count;
+}
+
+static void gol_seed(void)
+{
+    gol_rng ^= (uint16_t)HAL_GetTick();
+    memset(gol_grid, 0, sizeof(gol_grid));
+    for (int r = 0; r < GOL_ROWS; r++) {
+        for (int c = 0; c < GOL_COLS; c++) {
+            if ((gol_rand8() % 4) == 0) {
+                gol_set(gol_grid, r, c, 1);
+            }
+        }
+    }
+    memset(gol_hist, 0, sizeof(gol_hist));
+    gol_gen_count = 0;
+    gol_prev_pop = 0;
+    gol_stable_pop_count = 0;
+}
+
+/* Inject a small cluster of random cells to nudge the simulation */
+static void gol_inject(void)
+{
+    gol_rng ^= (uint16_t)HAL_GetTick();
+    /* Small cluster in a ~10-col band at a random spot */
+    int center_c = (int)(gol_rand8() % GOL_COLS);
+    for (int i = 0; i < GOL_INJECT_CELLS; i++) {
+        int r = gol_rand8() % GOL_ROWS;
+        int c = (center_c + (int)(gol_rand8() % 10) - 5 + GOL_COLS) % GOL_COLS;
+        gol_set(gol_grid, r, c, 1);
+    }
+    gol_gen_count = 0;
+    gol_stable_pop_count = 0;
+}
+
+static bool gol_matches_history(const uint8_t candidate[][TOTAL_BYTES])
+{
+    /* Check against current grid and 3 previous generations */
+    if (memcmp(candidate, gol_grid, sizeof(gol_grid)) == 0) return true;
+    for (int h = 0; h < 3; h++) {
+        if (memcmp(candidate, gol_hist[h], sizeof(gol_grid)) == 0) return true;
+    }
+    return false;
 }
 
 static void gol_step(void)
@@ -647,17 +702,50 @@ static void gol_step(void)
         }
     }
 
-    /* Check for stagnation (identical to previous generation) */
-    if (memcmp(next, gol_prev, sizeof(next)) == 0) {
-        gol_stale_count++;
-    } else if (memcmp(next, gol_grid, sizeof(next)) == 0) {
-        gol_stale_count++;
-    } else {
-        gol_stale_count = 0;
+    /* Shift history ring: [2] = [1], [1] = [0], [0] = current grid */
+    memcpy(gol_hist[2], gol_hist[1], sizeof(gol_grid));
+    memcpy(gol_hist[1], gol_hist[0], sizeof(gol_grid));
+    memcpy(gol_hist[0], gol_grid, sizeof(gol_grid));
+
+    /* Install next generation */
+    memcpy(gol_grid, next, sizeof(next));
+    gol_gen_count++;
+
+    /* --- Stagnation detection --- */
+    int pop = gol_population();
+
+    /* 1. Dead or nearly dead → full reseed */
+    if (pop < GOL_POP_FLOOR) {
+        gol_seed();
+        return;
     }
 
-    memcpy(gol_prev, gol_grid, sizeof(gol_grid));
-    memcpy(gol_grid, next, sizeof(next));
+    /* 2. Exact match with any of the last 3 generations → oscillator detected */
+    if (gol_matches_history(next)) {
+        gol_inject();
+        return;
+    }
+
+    /* 3. Population barely changing → stable still-lifes / oscillators */
+    int pop_diff = pop - gol_prev_pop;
+    if (pop_diff < 0) pop_diff = -pop_diff;
+    if (pop_diff <= 2) {
+        gol_stable_pop_count++;
+    } else {
+        gol_stable_pop_count = 0;
+    }
+    gol_prev_pop = pop;
+
+    if (gol_stable_pop_count >= GOL_STABLE_LIMIT) {
+        gol_inject();
+        return;
+    }
+
+    /* 4. Hard age limit → full reseed to keep things fresh */
+    if (gol_gen_count >= GOL_MAX_AGE) {
+        gol_seed();
+        return;
+    }
 }
 
 void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -670,18 +758,11 @@ void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         gol_inited = true;
     }
 
-    /* Evolve */
-    if (now - gol_last_tick >= GOL_STEP_MS) {
+    if (now - gol_last_tick >= gol_speed_ms[gol_speed_idx]) {
         gol_step();
         gol_last_tick = now;
-
-        /* Reseed if stale or population too low */
-        if (gol_stale_count >= GOL_STALE_LIMIT || gol_population() < 15) {
-            gol_seed();
-        }
     }
 
-    /* Copy grid to output buffer */
     memcpy(buf, gol_grid, sizeof(gol_grid));
 
     /* Overlay time with cleared border */
@@ -701,18 +782,26 @@ void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     }
 
     Matrix_DrawText_Buf(buf, 0, text_x, time_str);
+
+    /* Show speed name briefly after change */
+    if (now - gol_speed_show_tick < GOL_SPEED_SHOW_MS) {
+        const char *label = gol_speed_names[gol_speed_idx];
+        int lw = Matrix_TinyTextPixelWidth(label);
+        for (int r = 0; r < 6; r++) {
+            for (int c = NUM_COLS - lw - 2; c < NUM_COLS; c++) {
+                if (c >= 0 && c < NUM_COLS)
+                    buf[r][c / 8] &= ~(1 << (c % 8));
+            }
+        }
+        Matrix_DrawTinyText_Buf(buf, 1, NUM_COLS - lw, label);
+    }
 }
 
 /* =====================================================================
  *  SNAKE
  *
- *  Autonomous AI snake that wanders the 7x84 grid. The snake chases
- *  a food pellet and grows when it eats. If it would collide with
- *  itself, it picks the best safe direction. If no safe move exists,
- *  it resets. Time is overlaid in the center.
- *
- *  Grid is the full display. Snake body stored as a ring buffer of
- *  (row, col) positions for memory efficiency.
+ *  Autonomous AI snake on full 7x84 grid. Chases food, grows on eat.
+ *  Time overlaid in center.
  * =====================================================================*/
 
 #define SNAKE_MAX_LEN    120
@@ -757,17 +846,15 @@ static bool snake_occupies(int r, int c)
 
 static void snake_place_food(void)
 {
-    /* Try random positions, fall back to scanning */
     for (int attempts = 0; attempts < 200; attempts++) {
         int r = snake_rand8() % GOL_ROWS;
-        int c = ((uint16_t)snake_rand8() * 3) % GOL_COLS;  /* spread across wide display */
+        int c = ((uint16_t)snake_rand8() * 3) % GOL_COLS;
         if (!snake_occupies(r, c)) {
             snake_food_r = (uint8_t)r;
             snake_food_c = (uint8_t)c;
             return;
         }
     }
-    /* Fallback: scan */
     for (int r = 0; r < GOL_ROWS; r++) {
         for (int c = 0; c < GOL_COLS; c++) {
             if (!snake_occupies(r, c)) {
@@ -788,7 +875,6 @@ static void snake_reset(void)
     snake_dc = 1;
     snake_grow = 0;
 
-    /* Place in upper-left area */
     int start_r = 3;
     int start_c = 5;
     for (int i = 0; i < SNAKE_INIT_LEN; i++) {
@@ -812,18 +898,15 @@ static void snake_ai_choose_direction(void)
     int hr = head.r, hc = head.c;
     int fr = snake_food_r, fc = snake_food_c;
 
-    /* 4 possible directions */
     static const int8_t dirs[4][2] = {{0,1},{0,-1},{-1,0},{1,0}};
 
     int best_dir = -1;
     int best_dist = 9999;
 
-    /* First pass: find safe direction closest to food */
     for (int d = 0; d < 4; d++) {
         int nr = hr + dirs[d][0];
         int nc = hc + dirs[d][1];
 
-        /* Don't reverse into ourselves */
         if (dirs[d][0] == -snake_dr && dirs[d][1] == -snake_dc && snake_len > 1)
             continue;
 
@@ -836,7 +919,6 @@ static void snake_ai_choose_direction(void)
         }
     }
 
-    /* If no safe direction toward food, pick any safe direction */
     if (best_dir < 0) {
         for (int d = 0; d < 4; d++) {
             int nr = hr + dirs[d][0];
@@ -854,7 +936,6 @@ static void snake_ai_choose_direction(void)
         snake_dr = dirs[best_dir][0];
         snake_dc = dirs[best_dir][1];
     }
-    /* If still no safe move, keep current direction (will die and reset) */
 }
 
 void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
@@ -870,19 +951,15 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     if (now - snake_last_tick >= SNAKE_STEP_MS) {
         snake_last_tick = now;
 
-        /* AI decides direction */
         snake_ai_choose_direction();
 
-        /* Compute new head */
         SnakePos_t head = snake_body[snake_head_idx];
         int nr = head.r + snake_dr;
         int nc = head.c + snake_dc;
 
-        /* Wall collision or self collision -> reset */
         if (nr < 0 || nr >= GOL_ROWS || nc < 0 || nc >= GOL_COLS || snake_occupies(nr, nc)) {
             snake_reset();
         } else {
-            /* Advance head */
             snake_head_idx = (snake_head_idx + 1) % SNAKE_MAX_LEN;
             snake_body[snake_head_idx].r = (uint8_t)nr;
             snake_body[snake_head_idx].c = (uint8_t)nc;
@@ -892,10 +969,7 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
                 if (snake_len > SNAKE_MAX_LEN) snake_len = SNAKE_MAX_LEN;
                 snake_grow--;
             }
-            /* (if not growing, the tail naturally falls off since we only
-               use snake_len elements from head backwards) */
 
-            /* Check food */
             if (nr == snake_food_r && nc == snake_food_c) {
                 snake_grow += SNAKE_GROW_AMT;
                 snake_place_food();
@@ -903,7 +977,6 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Draw snake body */
     for (int i = 0; i < snake_len; i++) {
         int idx = (snake_head_idx - i + SNAKE_MAX_LEN) % SNAKE_MAX_LEN;
         int r = snake_body[idx].r;
@@ -913,7 +986,6 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Draw food (blink) */
     if ((now / 200) % 2) {
         int r = snake_food_r;
         int c = snake_food_c;
@@ -922,7 +994,6 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Overlay time */
     const SensorData_t *data = SensorManager_GetData();
     char time_str[16];
     sprintf(time_str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
@@ -945,11 +1016,7 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
  *  TYPEWRITER CLOCK
  *
  *  Each minute, the time "types" itself out one character at a time
- *  from left to right, with a blinking cursor. Once fully typed,
- *  the text holds until the next minute, when it clears and retypes.
- *
- *  Characters appear one at a time with a ~120ms typing interval.
- *  A cursor block blinks after the last typed character.
+ *  with a blinking cursor. Seconds shown in tiny font bottom-right.
  * =====================================================================*/
 
 #define TW_CHAR_INTERVAL_MS  120
@@ -971,21 +1038,10 @@ void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     uint8_t m = data->minutes;
     uint8_t s = data->seconds;
 
-    /* Build the full time string */
-    char full_str[20];
-    if (Settings_Is24Hour()) {
-        sprintf(full_str, "%02d:%02d:%02d", h, m, s);
-    } else {
-        char ap = (data->hours_24 < 12) ? 'a' : 'p';
-        sprintf(full_str, "%02d:%02d:%02d%c", h, m, s, ap);
-    }
-
-    /* Detect minute change -> restart typing */
     if (!tw_inited || m != tw_last_minute) {
         tw_last_minute = m;
         tw_chars_shown = 0;
 
-        /* Build the target string (HH:MM without seconds for the typing part) */
         if (Settings_Is24Hour()) {
             sprintf(tw_text, "%02d:%02d", h, m);
         } else {
@@ -997,7 +1053,6 @@ void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         tw_inited = true;
     }
 
-    /* Advance typing */
     if (tw_chars_shown < tw_total_chars) {
         if (now - tw_last_char_tick >= TW_CHAR_INTERVAL_MS) {
             tw_chars_shown++;
@@ -1005,7 +1060,6 @@ void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Draw the characters typed so far */
     char partial[20];
     memcpy(partial, tw_text, tw_chars_shown);
     partial[tw_chars_shown] = '\0';
@@ -1015,27 +1069,22 @@ void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     Matrix_DrawText_Buf(buf, 0, start_x, partial);
 
-    /* Draw blinking cursor after last typed character */
     int partial_w = Matrix_TextPixelWidth(partial);
     int cursor_x = start_x + partial_w;
 
     bool cursor_on;
     if (tw_chars_shown < tw_total_chars) {
-        /* Still typing: cursor always on */
         cursor_on = true;
     } else {
-        /* Done typing: cursor blinks */
         cursor_on = ((now / TW_CURSOR_BLINK_MS) % 2) == 0;
     }
 
     if (cursor_on && cursor_x >= 0 && cursor_x < NUM_COLS) {
-        /* Draw a 1px wide, 7px tall cursor bar */
         for (int r = 0; r < NUM_ROWS; r++) {
             buf[r][cursor_x / 8] |= (1 << (cursor_x % 8));
         }
     }
 
-    /* Show seconds in tiny font at bottom-right */
     {
         char sec_str[4];
         sprintf(sec_str, "%02d", s);
@@ -1047,113 +1096,115 @@ void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 /* =====================================================================
  *  PONG CLOCK
  *
- *  Two AI paddles play Pong. The left score = hours, right = minutes.
- *  When the time changes, the "losing" side lets a goal in.
+ *  Two AI paddles play Pong. Left score = hours, right = minutes.
+ *  When the real time changes, the appropriate side deliberately
+ *  misses so the score updates to match the clock.
  *
- *  Ball bounces naturally between points. Paddles track the ball
- *  with slight delay for realism. Court has a dotted center line.
- *
- *  Field: columns 0-83, rows 0-6.
- *  Left score area: cols 0-20, Right score area: cols 63-83.
- *  Paddles: 3px tall, 1px wide. Left at col 1, Right at col 82.
- *  Ball: 1x1 pixel.
+ *  Fixed-point ball physics (8.8). Paddles are 3px tall.
+ *  Ball serves at a strong diagonal angle and bounces off
+ *  top/bottom walls and paddles with english.
  * =====================================================================*/
 
-#define PONG_STEP_MS        40
-#define PONG_PADDLE_H        3
-#define PONG_PADDLE_LEFT_C   1
-#define PONG_PADDLE_RIGHT_C  82
-#define PONG_BALL_RESET_DELAY 800
+#define PONG_STEP_MS          35
+#define PONG_PADDLE_H          3
+#define PONG_LPAD_C            1   /* left paddle column */
+#define PONG_RPAD_C           82   /* right paddle column */
+#define PONG_RESET_DELAY_MS  600
+
+/* 8.8 fixed-point helpers */
+#define FP(x) ((int16_t)((x) * 256))
+#define FP_INT(x) ((x) >> 8)
 
 typedef struct {
-    /* Ball position in 8.8 fixed point for sub-pixel movement */
-    int16_t ball_r;     /* row * 256 */
-    int16_t ball_c;     /* col * 256 */
-    int16_t ball_dr;    /* row velocity */
-    int16_t ball_dc;    /* col velocity */
+    int16_t bx, by;         /* ball position  (8.8 fixed) */
+    int16_t bdx, bdy;       /* ball velocity  (8.8 fixed) */
 
-    int8_t pad_left;    /* top row of left paddle (0 to NUM_ROWS-PADDLE_H) */
-    int8_t pad_right;   /* top row of right paddle */
+    int8_t  lpad, rpad;     /* top row of each paddle (0..NUM_ROWS-PADDLE_H) */
 
-    uint8_t score_h;    /* displayed hours */
-    uint8_t score_m;    /* displayed minutes */
+    uint8_t disp_h, disp_m; /* currently displayed score */
 
-    bool     scoring;       /* ball scored, waiting to reset */
-    uint32_t score_tick;    /* when the score happened */
-    bool     let_left_in;   /* deliberately miss on left */
-    bool     let_right_in;  /* deliberately miss on right */
+    bool     waiting;       /* pause after goal before re-serve */
+    uint32_t wait_tick;
+
+    bool     miss_left;     /* left paddle should let ball through */
+    bool     miss_right;    /* right paddle should let ball through */
 
     uint32_t last_tick;
     bool     inited;
 } PongState_t;
 
-static PongState_t pong;
-static uint16_t pong_rng = 0xD00D;
+static PongState_t pg;
+static uint16_t pg_rng = 0xD00D;
 
-static int8_t pong_rand_dir(void)
+static int16_t pg_rand_sign(void)
 {
-    pong_rng ^= pong_rng << 7;
-    pong_rng ^= pong_rng >> 9;
-    pong_rng ^= pong_rng << 8;
-    return (pong_rng & 1) ? 1 : -1;
+    pg_rng ^= pg_rng << 7;
+    pg_rng ^= pg_rng >> 9;
+    pg_rng ^= pg_rng << 8;
+    return (pg_rng & 1) ? 1 : -1;
 }
 
-static void pong_serve(void)
+static void pg_serve(bool toward_left)
 {
-    /* Serve from center */
-    pong.ball_r = (NUM_ROWS / 2) * 256;
-    pong.ball_c = (NUM_COLS / 2) * 256;
+    /* Start from center */
+    pg.bx = FP(NUM_COLS / 2);
+    pg.by = FP(NUM_ROWS / 2);
 
-    /* Random vertical direction */
-    pong.ball_dr = pong_rand_dir() * 128;  /* ~0.5 pixel per step */
+    /* Strong diagonal: ~1.0 px/step horizontal, ~0.6 px/step vertical */
+    pg.bdx = toward_left ? -256 : 256;
+    pg.bdy = pg_rand_sign() * (128 + (pg_rng % 64));  /* 0.5-0.75 px/step vertical */
 
-    /* Serve toward whichever side needs to score (or random) */
-    if (pong.let_left_in) {
-        pong.ball_dc = -256;  /* serve left */
-    } else if (pong.let_right_in) {
-        pong.ball_dc = 256;   /* serve right */
-    } else {
-        pong.ball_dc = pong_rand_dir() * 256;
-    }
-
-    pong.scoring = false;
+    pg.waiting = false;
 }
 
-static void pong_init(void)
+static void pg_init(void)
 {
-    const SensorData_t *data = SensorManager_GetData();
-    pong.score_h = get_display_hour(data);
-    pong.score_m = data->minutes;
-    pong.pad_left = (NUM_ROWS - PONG_PADDLE_H) / 2;
-    pong.pad_right = (NUM_ROWS - PONG_PADDLE_H) / 2;
-    pong.let_left_in = false;
-    pong.let_right_in = false;
-    pong.scoring = false;
-    pong.last_tick = HAL_GetTick();
-    pong.inited = true;
-    pong_rng ^= (uint16_t)HAL_GetTick();
-    pong_serve();
+    const SensorData_t *d = SensorManager_GetData();
+    pg.disp_h = get_display_hour(d);
+    pg.disp_m = d->minutes;
+    pg.lpad = (NUM_ROWS - PONG_PADDLE_H) / 2;
+    pg.rpad = (NUM_ROWS - PONG_PADDLE_H) / 2;
+    pg.miss_left = false;
+    pg.miss_right = false;
+    pg.waiting = false;
+    pg.last_tick = HAL_GetTick();
+    pg.inited = true;
+    pg_rng ^= (uint16_t)HAL_GetTick();
+    pg_serve(pg_rand_sign() > 0);
 }
 
-static void pong_move_paddle(int8_t *pad, int target_r, bool miss)
+/*
+ * Move paddle toward target row. speed = max pixels to move per step.
+ * If 'miss' is true and ball is heading this way, move AWAY from ball.
+ */
+static void pg_move_pad(int8_t *pad, int target_r, int speed, bool miss)
 {
-    /* Target is the center of the paddle aligned to ball */
-    int pad_center = *pad + PONG_PADDLE_H / 2;
+    int center = *pad + PONG_PADDLE_H / 2;
 
     if (miss) {
-        /* Move away from ball to deliberately miss */
-        if (target_r <= NUM_ROWS / 2) {
-            if (*pad < NUM_ROWS - PONG_PADDLE_H) (*pad)++;
+        /* Move opposite to ball to guarantee a miss */
+        if (target_r <= center) {
+            /* Ball is above or at center — move down */
+            for (int i = 0; i < speed; i++) {
+                if (*pad < NUM_ROWS - PONG_PADDLE_H) (*pad)++;
+            }
         } else {
-            if (*pad > 0) (*pad)--;
+            /* Ball is below center — move up */
+            for (int i = 0; i < speed; i++) {
+                if (*pad > 0) (*pad)--;
+            }
         }
         return;
     }
 
-    if (pad_center < target_r) {
-        if (*pad < NUM_ROWS - PONG_PADDLE_H) (*pad)++;
-    } else if (pad_center > target_r) {
-        if (*pad > 0) (*pad)--;
+    /* Normal tracking: move toward target, up to 'speed' pixels */
+    for (int i = 0; i < speed; i++) {
+        center = *pad + PONG_PADDLE_H / 2;
+        if (center < target_r && *pad < NUM_ROWS - PONG_PADDLE_H) {
+            (*pad)++;
+        } else if (center > target_r && *pad > 0) {
+            (*pad)--;
+        }
     }
 }
 
@@ -1161,116 +1212,122 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
     uint32_t now = HAL_GetTick();
 
-    if (!pong.inited) {
-        pong_init();
-    }
+    if (!pg.inited) pg_init();
 
-    /* Check if real time changed — trigger a goal */
+    /* --- Check if real time changed → trigger a miss --- */
     const SensorData_t *data = SensorManager_GetData();
     uint8_t real_h = get_display_hour(data);
     uint8_t real_m = data->minutes;
 
-    if (!pong.scoring) {
-        if (real_m != pong.score_m) {
-            /* Minutes changed — right side needs to score */
-            pong.let_right_in = true;
-            pong.let_left_in = false;
+    if (!pg.waiting) {
+        if (real_h != pg.disp_h) {
+            /* Need left score to change: ball must score on RIGHT side,
+               so RIGHT paddle misses → ball goes past right → left "scores" */
+            pg.miss_right = true;
         }
-        if (real_h != pong.score_h) {
-            /* Hours changed — left side needs to score */
-            pong.let_left_in = true;
-            /* Also update minutes */
-            pong.let_right_in = (real_m != pong.score_m);
+        if (real_m != pg.disp_m) {
+            /* Need right score to change: LEFT paddle misses */
+            pg.miss_left = true;
         }
     }
 
-    /* Step physics */
-    if (now - pong.last_tick >= PONG_STEP_MS) {
-        pong.last_tick = now;
+    /* --- Physics step --- */
+    if (now - pg.last_tick >= PONG_STEP_MS) {
+        pg.last_tick = now;
 
-        if (pong.scoring) {
-            /* Wait then reset */
-            if (now - pong.score_tick >= PONG_BALL_RESET_DELAY) {
-                pong_serve();
+        if (pg.waiting) {
+            if (now - pg.wait_tick >= PONG_RESET_DELAY_MS) {
+                /* Serve toward the side that still needs to miss, or random */
+                bool serve_left = pg.miss_left;
+                if (!pg.miss_left && !pg.miss_right)
+                    serve_left = (pg_rand_sign() > 0);
+                pg_serve(serve_left);
             }
         } else {
             /* Move ball */
-            pong.ball_r += pong.ball_dr;
-            pong.ball_c += pong.ball_dc;
+            pg.bx += pg.bdx;
+            pg.by += pg.bdy;
 
-            int br = pong.ball_r / 256;
-            int bc = pong.ball_c / 256;
+            int br = FP_INT(pg.by);
+            int bc = FP_INT(pg.bx);
 
-            /* Top/bottom bounce */
-            if (br <= 0) {
-                pong.ball_r = 0;
-                pong.ball_dr = -pong.ball_dr;
-                br = 0;
+            /* Top/bottom wall bounce */
+            if (pg.by < 0) {
+                pg.by = -pg.by;
+                pg.bdy = -pg.bdy;
             }
-            if (br >= NUM_ROWS - 1) {
-                pong.ball_r = (NUM_ROWS - 1) * 256;
-                pong.ball_dr = -pong.ball_dr;
-                br = NUM_ROWS - 1;
+            if (pg.by > FP(NUM_ROWS - 1)) {
+                pg.by = FP(NUM_ROWS - 1) * 2 - pg.by;
+                pg.bdy = -pg.bdy;
             }
 
-            /* Left paddle collision */
-            if (bc <= PONG_PADDLE_LEFT_C + 1 && pong.ball_dc < 0) {
-                if (br >= pong.pad_left && br < pong.pad_left + PONG_PADDLE_H) {
-                    pong.ball_dc = -pong.ball_dc;
-                    pong.ball_c = (PONG_PADDLE_LEFT_C + 2) * 256;
+            br = FP_INT(pg.by);
+            bc = FP_INT(pg.bx);
 
-                    /* Add english based on where ball hit paddle */
-                    int hit_pos = br - pong.pad_left;
-                    if (hit_pos == 0) pong.ball_dr -= 64;
-                    else if (hit_pos == PONG_PADDLE_H - 1) pong.ball_dr += 64;
+            /* Left paddle check */
+            if (bc <= PONG_LPAD_C + 1 && pg.bdx < 0) {
+                if (br >= pg.lpad && br < pg.lpad + PONG_PADDLE_H) {
+                    /* Paddle hit — bounce */
+                    pg.bdx = -pg.bdx;
+                    pg.bx = FP(PONG_LPAD_C + 2);
 
-                    /* Clamp vertical speed */
-                    if (pong.ball_dr > 200) pong.ball_dr = 200;
-                    if (pong.ball_dr < -200) pong.ball_dr = -200;
+                    /* Add english: top of paddle = upward, bottom = downward */
+                    int hit = br - pg.lpad;
+                    if (hit == 0) pg.bdy -= 80;
+                    else if (hit == PONG_PADDLE_H - 1) pg.bdy += 80;
+
+                    /* Clamp vertical speed to keep things interesting */
+                    if (pg.bdy > 220) pg.bdy = 220;
+                    if (pg.bdy < -220) pg.bdy = -220;
+                    /* Ensure minimum vertical motion */
+                    if (pg.bdy > 0 && pg.bdy < 40) pg.bdy = 40;
+                    if (pg.bdy < 0 && pg.bdy > -40) pg.bdy = -40;
+
                 } else if (bc <= 0) {
-                    /* Goal on left side — right (minutes) scores */
-                    pong.score_m = real_m;
-                    if (pong.let_left_in && real_h != pong.score_h) {
-                        pong.score_h = real_h;
-                        pong.let_left_in = false;
-                    }
-                    pong.let_right_in = false;
-                    pong.scoring = true;
-                    pong.score_tick = now;
+                    /* Ball past left edge → right side (minutes) scores */
+                    pg.disp_m = real_m;
+                    pg.miss_left = false;
+                    /* If hours also need updating and this was a left miss,
+                       we'll catch it on next serve */
+                    pg.waiting = true;
+                    pg.wait_tick = now;
                 }
             }
 
-            /* Right paddle collision */
-            if (bc >= PONG_PADDLE_RIGHT_C - 1 && pong.ball_dc > 0) {
-                if (br >= pong.pad_right && br < pong.pad_right + PONG_PADDLE_H) {
-                    pong.ball_dc = -pong.ball_dc;
-                    pong.ball_c = (PONG_PADDLE_RIGHT_C - 2) * 256;
+            /* Right paddle check */
+            if (bc >= PONG_RPAD_C - 1 && pg.bdx > 0) {
+                if (br >= pg.rpad && br < pg.rpad + PONG_PADDLE_H) {
+                    pg.bdx = -pg.bdx;
+                    pg.bx = FP(PONG_RPAD_C - 2);
 
-                    int hit_pos = br - pong.pad_right;
-                    if (hit_pos == 0) pong.ball_dr -= 64;
-                    else if (hit_pos == PONG_PADDLE_H - 1) pong.ball_dr += 64;
+                    int hit = br - pg.rpad;
+                    if (hit == 0) pg.bdy -= 80;
+                    else if (hit == PONG_PADDLE_H - 1) pg.bdy += 80;
 
-                    if (pong.ball_dr > 200) pong.ball_dr = 200;
-                    if (pong.ball_dr < -200) pong.ball_dr = -200;
+                    if (pg.bdy > 220) pg.bdy = 220;
+                    if (pg.bdy < -220) pg.bdy = -220;
+                    if (pg.bdy > 0 && pg.bdy < 40) pg.bdy = 40;
+                    if (pg.bdy < 0 && pg.bdy > -40) pg.bdy = -40;
+
                 } else if (bc >= NUM_COLS - 1) {
-                    /* Goal on right side — left (hours) scores */
-                    pong.score_h = real_h;
-                    if (pong.let_right_in && real_m != pong.score_m) {
-                        pong.score_m = real_m;
-                        pong.let_right_in = false;
-                    }
-                    pong.let_left_in = false;
-                    pong.scoring = true;
-                    pong.score_tick = now;
+                    /* Ball past right edge → left side (hours) scores */
+                    pg.disp_h = real_h;
+                    pg.miss_right = false;
+                    pg.waiting = true;
+                    pg.wait_tick = now;
                 }
             }
 
-            /* Move paddles */
-            int ball_target_r = pong.ball_r / 256;
-            pong_move_paddle(&pong.pad_left, ball_target_r,
-                             pong.let_left_in && pong.ball_dc < 0);
-            pong_move_paddle(&pong.pad_right, ball_target_r,
-                             pong.let_right_in && pong.ball_dc > 0);
+            /* --- Move paddles --- */
+            int ball_row = FP_INT(pg.by);
+
+            /* Left paddle: miss if miss_left AND ball heading left */
+            bool l_miss = pg.miss_left && (pg.bdx < 0);
+            pg_move_pad(&pg.lpad, ball_row, 2, l_miss);
+
+            /* Right paddle: miss if miss_right AND ball heading right */
+            bool r_miss = pg.miss_right && (pg.bdx > 0);
+            pg_move_pad(&pg.rpad, ball_row, 2, r_miss);
         }
     }
 
@@ -1278,51 +1335,47 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     /* Dotted center line */
     {
-        int center_c = NUM_COLS / 2;
-        for (int r = 0; r < NUM_ROWS; r++) {
-            if (r % 2 == 0) {
-                buf[r][center_c / 8] |= (1 << (center_c % 8));
-            }
+        int cc = NUM_COLS / 2;
+        for (int r = 0; r < NUM_ROWS; r += 2) {
+            buf[r][cc / 8] |= (1 << (cc % 8));
         }
     }
 
     /* Left paddle */
     for (int i = 0; i < PONG_PADDLE_H; i++) {
-        int r = pong.pad_left + i;
+        int r = pg.lpad + i;
         if (r >= 0 && r < NUM_ROWS) {
-            buf[r][PONG_PADDLE_LEFT_C / 8] |= (1 << (PONG_PADDLE_LEFT_C % 8));
+            buf[r][PONG_LPAD_C / 8] |= (1 << (PONG_LPAD_C % 8));
         }
     }
 
     /* Right paddle */
     for (int i = 0; i < PONG_PADDLE_H; i++) {
-        int r = pong.pad_right + i;
+        int r = pg.rpad + i;
         if (r >= 0 && r < NUM_ROWS) {
-            buf[r][PONG_PADDLE_RIGHT_C / 8] |= (1 << (PONG_PADDLE_RIGHT_C % 8));
+            buf[r][PONG_RPAD_C / 8] |= (1 << (PONG_RPAD_C % 8));
         }
     }
 
-    /* Ball */
-    if (!pong.scoring) {
-        int br = pong.ball_r / 256;
-        int bc = pong.ball_c / 256;
+    /* Ball (hidden during reset pause) */
+    if (!pg.waiting) {
+        int br = FP_INT(pg.by);
+        int bc = FP_INT(pg.bx);
         if (br >= 0 && br < NUM_ROWS && bc >= 0 && bc < NUM_COLS) {
             buf[br][bc / 8] |= (1 << (bc % 8));
         }
     }
 
-    /* Scores — hours on left, minutes on right */
+    /* Scores — hours left, minutes right */
     {
         char h_str[4], m_str[4];
-        sprintf(h_str, "%02d", pong.score_h);
-        sprintf(m_str, "%02d", pong.score_m);
+        sprintf(h_str, "%02d", pg.disp_h);
+        sprintf(m_str, "%02d", pg.disp_m);
 
-        /* Left score: centered in left half */
         int lw = Matrix_TextPixelWidth(h_str);
         int lx = (NUM_COLS / 2 - lw) / 2;
         Matrix_DrawText_Buf(buf, 0, lx, h_str);
 
-        /* Right score: centered in right half */
         int rw = Matrix_TextPixelWidth(m_str);
         int rx = NUM_COLS / 2 + (NUM_COLS / 2 - rw) / 2;
         Matrix_DrawText_Buf(buf, 0, rx, m_str);
