@@ -93,6 +93,11 @@ static void App_RegisterScreens(void)
     Screen_Register(Screen_TimeDate);
     Screen_Register(Screen_TimeDateCompact);
     Screen_Register(Screen_TimeTempHumid);
+
+    worldclock_screen_index  = Screen_Register(Screen_WorldClock);
+    Rotary_SetWorldClockScreenIndex(worldclock_screen_index);
+    WorldClock_Init();
+
     bigdigit_screen_index    = Screen_Register(Screen_BigDigit);
     typewriter_screen_index  = Screen_Register(Screen_Typewriter);
     pongclock_screen_index   = Screen_Register(Screen_PongClock);
@@ -103,19 +108,15 @@ static void App_RegisterScreens(void)
     Rotary_SetConwayScreenIndex(conway_screen_index);
     snake_screen_index       = Screen_Register(Screen_Snake);
 
-    /* ---- Utility screens ---- */
-    battery_screen_index     = Screen_Register(Screen_Battery);
-    Rotary_SetBatteryScreenIndex(battery_screen_index);
-
-    worldclock_screen_index  = Screen_Register(Screen_WorldClock);
-    Rotary_SetWorldClockScreenIndex(worldclock_screen_index);
-    WorldClock_Init();
-
     stopwatch_screen_index   = Screen_Register(Screen_Stopwatch);
     countdown_screen_index   = Screen_Register(Screen_Countdown);
 
     Rotary_SetStopwatchScreenIndex(stopwatch_screen_index);
     Rotary_SetCountdownScreenIndex(countdown_screen_index);
+
+    /* ---- Utility screens ---- */
+    battery_screen_index     = Screen_Register(Screen_Battery);
+    Rotary_SetBatteryScreenIndex(battery_screen_index);
 }
 
 /* ================= PUBLIC API ================= */
