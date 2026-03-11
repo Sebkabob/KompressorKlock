@@ -35,6 +35,19 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_Battery_Toggle(void);
 bool Screen_Battery_IsAlt(void);
 
+/*
+ * Called when the user navigates AWAY from the battery screen.
+ * Resets the debug mode so it is not visible when they return.
+ */
+void Screen_Battery_ResetDebug(void);
+
+/*
+ * Record one button press while on the battery screen.
+ * After 6 presses within the timeout window the debug overlay is shown
+ * instead of the normal battery view.  No new screen slot is registered.
+ */
+void Screen_Battery_RecordPress(void);
+
 /* ================= CONWAY SPEED CONTROL ================= */
 
 void Screen_Conway_CycleSpeed(void);

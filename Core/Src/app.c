@@ -11,16 +11,16 @@
 #include <string.h>
 
 /* ================= SCREEN INDICES ================= */
-static int stopwatch_screen_index  = -1;
-static int countdown_screen_index  = -1;
-static int battery_screen_index    = -1;
-static int worldclock_screen_index = -1;
-static int pixelrain_screen_index  = -1;
-static int bigdigit_screen_index   = -1;
-static int conway_screen_index     = -1;
-static int snake_screen_index      = -1;
-static int typewriter_screen_index = -1;
-static int pongclock_screen_index  = -1;
+static int stopwatch_screen_index    = -1;
+static int countdown_screen_index    = -1;
+static int battery_screen_index      = -1;
+static int worldclock_screen_index   = -1;
+static int pixelrain_screen_index    = -1;
+static int bigdigit_screen_index     = -1;
+static int conway_screen_index       = -1;
+static int snake_screen_index        = -1;
+static int typewriter_screen_index   = -1;
+static int pongclock_screen_index    = -1;
 
 /* ================= EXTERN TIMERS ================= */
 extern TIM_HandleTypeDef htim2;
@@ -28,10 +28,6 @@ extern TIM_HandleTypeDef htim3;
 
 /* ================= BOOT SEQUENCE ================= */
 
-/**
- * @brief  Blank the shift registers so no stale data is visible
- *         during the boot sequence.
- */
 static void App_BlankShiftRegisters(void)
 {
     GPIOA->BSRR = A1_Pin | A2_Pin | A3_Pin | A4_Pin
@@ -46,14 +42,10 @@ static void App_BlankShiftRegisters(void)
     GPIOA->BRR  = RCLK_Pin;
 }
 
-/**
- * @brief  Display the boot logo with a fade-in, then hold briefly.
- */
 static void App_BootAnimation(void)
 {
     Matrix_SetBrightness(0);
 
-    /* Render logo into framebuffer */
     uint8_t logo_buf[NUM_ROWS][TOTAL_BYTES];
     memset(logo_buf, 0, sizeof(logo_buf));
     Matrix_DrawBitmap_Buf(logo_buf, kompressor_logo);
@@ -61,7 +53,6 @@ static void App_BootAnimation(void)
 
     HAL_Delay(250);
 
-    /* Fade in over 500ms */
     uint32_t fade_start = HAL_GetTick();
     uint8_t last_b = 0;
 
@@ -81,9 +72,6 @@ static void App_BootAnimation(void)
     HAL_Delay(1000);
 }
 
-/**
- * @brief  Register all screens and wire up interactive screen indices.
- */
 static void App_RegisterScreens(void)
 {
     Screen_Init();
@@ -117,6 +105,10 @@ static void App_RegisterScreens(void)
     /* ---- Utility screens ---- */
     battery_screen_index     = Screen_Register(Screen_Battery);
     Rotary_SetBatteryScreenIndex(battery_screen_index);
+
+    /* NOTE: Battery debug is NOT registered as a screen.
+     * It renders as an overlay inside Screen_Battery() when
+     * the developer unlocks it via 6 button presses. */
 }
 
 /* ================= PUBLIC API ================= */
@@ -144,7 +136,6 @@ void App_Init(I2C_HandleTypeDef *hi2c)
 
     Settings_LoadFromEEPROM();
 
-    /* Restore last active screen and dissolve from logo */
     uint8_t saved = Settings_GetSavedScreen();
     Screen_SetCurrent(saved);
     Screen_BootDissolve();
@@ -159,16 +150,12 @@ void App_Update(void)
 
     Buzzer_Update();
 
-    /* Mark dirty for interactive screens that self-update */
-    if (Screen_GetCurrent() == stopwatch_screen_index && Stopwatch_NeedsRedraw()) {
+    if (Screen_GetCurrent() == stopwatch_screen_index && Stopwatch_NeedsRedraw())
         Screen_MarkDirty();
-    }
-    if (Screen_GetCurrent() == countdown_screen_index && Countdown_NeedsRedraw()) {
+    if (Screen_GetCurrent() == countdown_screen_index && Countdown_NeedsRedraw())
         Screen_MarkDirty();
-    }
-    if (Screen_GetCurrent() == worldclock_screen_index && WorldClock_NeedsRedraw()) {
+    if (Screen_GetCurrent() == worldclock_screen_index && WorldClock_NeedsRedraw())
         Screen_MarkDirty();
-    }
 
     Rotary_Update();
 
@@ -191,24 +178,23 @@ void App_Update(void)
         }
     }
 
-    if (SensorManager_HasChanged()) {
+    if (SensorManager_HasChanged())
         Screen_MarkDirty();
-    }
 
     /* Continuously animated screens */
     {
         int cur = Screen_GetCurrent();
-        if (cur == pixelrain_screen_index ||
-            cur == bigdigit_screen_index ||
-            cur == conway_screen_index ||
-            cur == snake_screen_index ||
-            cur == typewriter_screen_index ||
+        if (cur == pixelrain_screen_index    ||
+            cur == bigdigit_screen_index     ||
+            cur == conway_screen_index       ||
+            cur == snake_screen_index        ||
+            cur == typewriter_screen_index   ||
             cur == pongclock_screen_index) {
             Screen_MarkDirty();
         }
     }
 
-    /* Battery screen animation while charging */
+    /* Battery screen: mark dirty when charging (animation) or debug active */
     if (battery_screen_index >= 0 && Screen_GetCurrent() == battery_screen_index) {
         const SensorData_t *batt_data = SensorManager_GetData();
         if (batt_data->current_mA >= 0) {

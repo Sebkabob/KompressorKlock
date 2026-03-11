@@ -93,6 +93,9 @@ static bool     sw_hold_consumed = false;
 
 static uint8_t  bar_height = 0;
 
+/* Track previous screen to detect navigation away from battery screen */
+static int prev_screen = -1;
+
 static void consume_hold(void)
 {
     sw_hold_consumed = true;
@@ -136,6 +139,7 @@ void Rotary_Init(void)
     step_accum      = 0;
     pending_steps   = 0;
     bar_height      = 0;
+    prev_screen     = -1;
 
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
@@ -162,6 +166,18 @@ void Rotary_Update(void)
 {
     uint32_t now = HAL_GetTick();
     bool in_settings = (Settings_GetState() != SETTINGS_STATE_INACTIVE);
+
+    /* ---- Detect navigation away from battery screen ---- */
+    {
+        int cur = Screen_GetCurrent();
+        if (prev_screen != cur) {
+            /* We just moved screens — if we were on the battery screen, reset debug */
+            if (prev_screen == battery_screen_index && battery_screen_index >= 0) {
+                Screen_Battery_ResetDebug();
+            }
+            prev_screen = cur;
+        }
+    }
 
     /* ---- Countdown alarm: force-jump to countdown screen ---- */
     if (countdown_screen_index >= 0 &&
@@ -282,6 +298,8 @@ void Rotary_Update(void)
                             Settings_OnPress();
                             Screen_MarkDirty();
                         } else if (on_battery_screen()) {
+                            /* Record press for debug unlock, then do normal toggle */
+                            Screen_Battery_RecordPress();
                             Screen_Battery_Toggle();
                             Screen_MarkDirty();
                         } else if (on_conway_screen()) {

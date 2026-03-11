@@ -5,6 +5,7 @@
 #include "timer_app.h"
 #include "main.h"
 #include "world_clock.h"
+#include "screens.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -66,9 +67,26 @@ void Screen_TimeDate(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
     Matrix_DrawTextRight_Buf(buf, 0, date_str);
 }
 
-/* ================= BATTERY SCREEN TOGGLE STATE ================= */
+/* =====================================================================
+ *  BATTERY SCREEN
+ *
+ *  Normal view   : shown to the customer always.
+ *  Debug overlay : activated by pressing the button 6 times in a row
+ *                  while on this screen.  Displays raw mV / mA / SOC%
+ *                  in the tiny 3x5 font.
+ *                  Scrolling away from this screen (Screen_Battery_ResetDebug)
+ *                  clears the debug flag so it is gone when they come back.
+ * =====================================================================*/
 
-static bool battery_show_alt = false;
+static bool battery_show_alt   = false;
+
+/* --- debug state --- */
+static bool     battery_debug_active     = false;
+static uint8_t  battery_press_count      = 0;
+static uint32_t battery_last_press_tick  = 0;
+
+#define BATTERY_PRESS_WINDOW_MS    2000u
+#define BATTERY_DEBUG_PRESS_COUNT  6
 
 void Screen_Battery_Toggle(void)
 {
@@ -80,10 +98,60 @@ bool Screen_Battery_IsAlt(void)
     return battery_show_alt;
 }
 
+void Screen_Battery_ResetDebug(void)
+{
+    battery_debug_active    = false;
+    battery_press_count     = 0;
+    battery_last_press_tick = 0;
+}
+
+void Screen_Battery_RecordPress(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    /* Reset counter if too much time passed since the last press */
+    if ((now - battery_last_press_tick) > BATTERY_PRESS_WINDOW_MS)
+        battery_press_count = 0;
+
+    battery_last_press_tick = now;
+    battery_press_count++;
+
+    if (battery_press_count >= BATTERY_DEBUG_PRESS_COUNT) {
+        battery_debug_active = true;
+        battery_press_count  = 0;   /* ready for a fresh sequence next time */
+    }
+}
+
 /* ================= BATTERY SCREEN (NORMAL) ================= */
 
 void Screen_Battery(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 {
+    /* --- DEBUG OVERLAY --- */
+    if (battery_debug_active) {
+        const SensorData_t *data = SensorManager_GetData();
+
+        char mv_str[12], ma_str[12], soc_str[12];
+
+        sprintf(mv_str, "%04dMV", data->voltage_mV);
+
+        int16_t ma = (int16_t)data->current_mA;
+        sprintf(ma_str, "%c%03dMA", ma < 0 ? '-' : '+', ma < 0 ? -ma : ma);
+
+        sprintf(soc_str, "SOC %03d%%", data->soc_percent);
+
+        /* Row 0: voltage left, current right */
+        Matrix_DrawTinyText_Buf(buf, 0, 0, mv_str);
+        int rw = Matrix_TinyTextPixelWidth(ma_str);
+        Matrix_DrawTinyText_Buf(buf, 0, NUM_COLS - rw, ma_str);
+
+        /* Row 2: SOC centred */
+        int sw = Matrix_TinyTextPixelWidth(soc_str);
+        Matrix_DrawTinyText_Buf(buf, 2, ((NUM_COLS - sw) / 2)+4, soc_str);
+
+        return;
+    }
+
+    /* --- NORMAL / ALT VIEW --- */
     if (battery_show_alt) {
         Screen_BatteryAlt(buf);
         return;
@@ -288,7 +356,6 @@ void Screen_TimeDateCompact(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     uint8_t month = RV3032_GetMonth();
     uint8_t date = RV3032_GetDate();
-//    uint8_t year = (uint8_t)(RV3032_GetYear() - 2000);
 
     if (Settings_Is24Hour()) {
         sprintf(date_str, "%d/%d", date, month);
@@ -546,46 +613,31 @@ void Screen_PixelRain(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 /* =====================================================================
  *  CONWAY'S GAME OF LIFE
- *
- *  Full 7x84 toroidal grid. Time overlaid in center.
- *
- *  Anti-stagnation strategy:
- *    - Tracks 3 previous generations to catch period-1/2/3 oscillators
- *    - Monitors population: if it barely changes for 8 gens, inject chaos
- *    - Hard age limit: full reseed after ~12 seconds of same generation
- *    - "Inject" mode: instead of full reseed, sprinkle random cells into
- *      a region to create new activity while preserving existing patterns
- *    - Population floor: reseed if population drops below 10
- *
- *  Click to cycle speed: Slow (250ms) -> Normal (150ms) -> Fast (60ms).
  * =====================================================================*/
 
 #define GOL_ROWS  NUM_ROWS
 #define GOL_COLS  NUM_COLS
 
 static uint8_t gol_grid[GOL_ROWS][TOTAL_BYTES];
-static uint8_t gol_hist[3][GOL_ROWS][TOTAL_BYTES];  /* 3 previous generations */
+static uint8_t gol_hist[3][GOL_ROWS][TOTAL_BYTES];
 static bool    gol_inited = false;
 static uint32_t gol_last_tick = 0;
 static uint16_t gol_rng = 0xCAFE;
 
-/* Stagnation tracking */
-static uint16_t gol_gen_count = 0;       /* generations since last seed/inject */
-static int      gol_prev_pop = 0;        /* population last gen */
-static uint8_t  gol_stable_pop_count = 0;/* consecutive gens with similar pop */
+static uint16_t gol_gen_count = 0;
+static int      gol_prev_pop = 0;
+static uint8_t  gol_stable_pop_count = 0;
 
-/* Speed: 0=Slow, 1=Normal, 2=Fast */
 static uint8_t gol_speed_idx = 1;
 static const uint16_t gol_speed_ms[] = { 500, 150, 100 };
 static const char * const gol_speed_names[] = { "Slow", "Norm", "Fast" };
 
 #define GOL_SPEED_COUNT      3
-#define GOL_POP_FLOOR        3    /* only reseed if nearly dead */
-#define GOL_STABLE_LIMIT    16    /* be patient — let it settle before injecting */
-#define GOL_MAX_AGE        200    /* full reseed after ~30s at normal speed */
-#define GOL_INJECT_CELLS    12    /* gentle nudge, not a bomb */
+#define GOL_POP_FLOOR        3
+#define GOL_STABLE_LIMIT    16
+#define GOL_MAX_AGE        200
+#define GOL_INJECT_CELLS    12
 
-/* Brief overlay when speed changes */
 static uint32_t gol_speed_show_tick = 0;
 #define GOL_SPEED_SHOW_MS  800
 
@@ -649,11 +701,9 @@ static void gol_seed(void)
     gol_stable_pop_count = 0;
 }
 
-/* Inject a small cluster of random cells to nudge the simulation */
 static void gol_inject(void)
 {
     gol_rng ^= (uint16_t)HAL_GetTick();
-    /* Small cluster in a ~10-col band at a random spot */
     int center_c = (int)(gol_rand8() % GOL_COLS);
     for (int i = 0; i < GOL_INJECT_CELLS; i++) {
         int r = gol_rand8() % GOL_ROWS;
@@ -666,7 +716,6 @@ static void gol_inject(void)
 
 static bool gol_matches_history(const uint8_t candidate[][TOTAL_BYTES])
 {
-    /* Check against current grid and 3 previous generations */
     if (memcmp(candidate, gol_grid, sizeof(gol_grid)) == 0) return true;
     for (int h = 0; h < 3; h++) {
         if (memcmp(candidate, gol_hist[h], sizeof(gol_grid)) == 0) return true;
@@ -702,31 +751,25 @@ static void gol_step(void)
         }
     }
 
-    /* Shift history ring: [2] = [1], [1] = [0], [0] = current grid */
     memcpy(gol_hist[2], gol_hist[1], sizeof(gol_grid));
     memcpy(gol_hist[1], gol_hist[0], sizeof(gol_grid));
     memcpy(gol_hist[0], gol_grid, sizeof(gol_grid));
 
-    /* Install next generation */
     memcpy(gol_grid, next, sizeof(next));
     gol_gen_count++;
 
-    /* --- Stagnation detection --- */
     int pop = gol_population();
 
-    /* 1. Dead or nearly dead → full reseed */
     if (pop < GOL_POP_FLOOR) {
         gol_seed();
         return;
     }
 
-    /* 2. Exact match with any of the last 3 generations → oscillator detected */
     if (gol_matches_history(next)) {
         gol_inject();
         return;
     }
 
-    /* 3. Population barely changing → stable still-lifes / oscillators */
     int pop_diff = pop - gol_prev_pop;
     if (pop_diff < 0) pop_diff = -pop_diff;
     if (pop_diff <= 2) {
@@ -741,7 +784,6 @@ static void gol_step(void)
         return;
     }
 
-    /* 4. Hard age limit → full reseed to keep things fresh */
     if (gol_gen_count >= GOL_MAX_AGE) {
         gol_seed();
         return;
@@ -765,7 +807,6 @@ void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     memcpy(buf, gol_grid, sizeof(gol_grid));
 
-    /* Overlay time with cleared border */
     const SensorData_t *data = SensorManager_GetData();
     char time_str[16];
     sprintf(time_str, "%02d:%02d:%02d", get_display_hour(data), data->minutes, data->seconds);
@@ -783,7 +824,6 @@ void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     Matrix_DrawText_Buf(buf, 0, text_x, time_str);
 
-    /* Show speed name briefly after change */
     if (now - gol_speed_show_tick < GOL_SPEED_SHOW_MS) {
         const char *label = gol_speed_names[gol_speed_idx];
         int lw = Matrix_TinyTextPixelWidth(label);
@@ -799,9 +839,6 @@ void Screen_Conway(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 /* =====================================================================
  *  SNAKE
- *
- *  Autonomous AI snake on full 7x84 grid. Chases food, grows on eat.
- *  Time overlaid in center.
  * =====================================================================*/
 
 #define SNAKE_MAX_LEN    120
@@ -1014,9 +1051,6 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 /* =====================================================================
  *  TYPEWRITER CLOCK
- *
- *  Each minute, the time "types" itself out one character at a time
- *  with a blinking cursor. Seconds shown in tiny font bottom-right.
  * =====================================================================*/
 
 #define TW_CHAR_INTERVAL_MS  120
@@ -1095,40 +1129,26 @@ void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
 /* =====================================================================
  *  PONG CLOCK
- *
- *  Two AI paddles play Pong. Left score = hours, right = minutes.
- *  When the real time changes, the appropriate side deliberately
- *  misses so the score updates to match the clock.
- *
- *  Fixed-point ball physics (8.8). Paddles are 3px tall.
- *  Ball serves at a strong diagonal angle and bounces off
- *  top/bottom walls and paddles with english.
  * =====================================================================*/
 
 #define PONG_STEP_MS          35
 #define PONG_PADDLE_H          3
-#define PONG_LPAD_C            1   /* left paddle column */
-#define PONG_RPAD_C           82   /* right paddle column */
+#define PONG_LPAD_C            1
+#define PONG_RPAD_C           82
 #define PONG_RESET_DELAY_MS  600
 
-/* 8.8 fixed-point helpers */
 #define FP(x) ((int16_t)((x) * 256))
 #define FP_INT(x) ((x) >> 8)
 
 typedef struct {
-    int16_t bx, by;         /* ball position  (8.8 fixed) */
-    int16_t bdx, bdy;       /* ball velocity  (8.8 fixed) */
-
-    int8_t  lpad, rpad;     /* top row of each paddle (0..NUM_ROWS-PADDLE_H) */
-
-    uint8_t disp_h, disp_m; /* currently displayed score */
-
-    bool     waiting;       /* pause after goal before re-serve */
+    int16_t bx, by;
+    int16_t bdx, bdy;
+    int8_t  lpad, rpad;
+    uint8_t disp_h, disp_m;
+    bool     waiting;
     uint32_t wait_tick;
-
-    bool     miss_left;     /* left paddle should let ball through */
-    bool     miss_right;    /* right paddle should let ball through */
-
+    bool     miss_left;
+    bool     miss_right;
     uint32_t last_tick;
     bool     inited;
 } PongState_t;
@@ -1146,14 +1166,10 @@ static int16_t pg_rand_sign(void)
 
 static void pg_serve(bool toward_left)
 {
-    /* Start from center */
     pg.bx = FP(NUM_COLS / 2);
     pg.by = FP(NUM_ROWS / 2);
-
-    /* Strong diagonal: ~1.0 px/step horizontal, ~0.6 px/step vertical */
     pg.bdx = toward_left ? -256 : 256;
-    pg.bdy = pg_rand_sign() * (128 + (pg_rng % 64));  /* 0.5-0.75 px/step vertical */
-
+    pg.bdy = pg_rand_sign() * (128 + (pg_rng % 64));
     pg.waiting = false;
 }
 
@@ -1173,23 +1189,16 @@ static void pg_init(void)
     pg_serve(pg_rand_sign() > 0);
 }
 
-/*
- * Move paddle toward target row. speed = max pixels to move per step.
- * If 'miss' is true and ball is heading this way, move AWAY from ball.
- */
 static void pg_move_pad(int8_t *pad, int target_r, int speed, bool miss)
 {
     int center = *pad + PONG_PADDLE_H / 2;
 
     if (miss) {
-        /* Move opposite to ball to guarantee a miss */
         if (target_r <= center) {
-            /* Ball is above or at center — move down */
             for (int i = 0; i < speed; i++) {
                 if (*pad < NUM_ROWS - PONG_PADDLE_H) (*pad)++;
             }
         } else {
-            /* Ball is below center — move up */
             for (int i = 0; i < speed; i++) {
                 if (*pad > 0) (*pad)--;
             }
@@ -1197,7 +1206,6 @@ static void pg_move_pad(int8_t *pad, int target_r, int speed, bool miss)
         return;
     }
 
-    /* Normal tracking: move toward target, up to 'speed' pixels */
     for (int i = 0; i < speed; i++) {
         center = *pad + PONG_PADDLE_H / 2;
         if (center < target_r && *pad < NUM_ROWS - PONG_PADDLE_H) {
@@ -1214,44 +1222,32 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
 
     if (!pg.inited) pg_init();
 
-    /* --- Check if real time changed → trigger a miss --- */
     const SensorData_t *data = SensorManager_GetData();
     uint8_t real_h = get_display_hour(data);
     uint8_t real_m = data->minutes;
 
     if (!pg.waiting) {
-        if (real_h != pg.disp_h) {
-            /* Need left score to change: ball must score on RIGHT side,
-               so RIGHT paddle misses → ball goes past right → left "scores" */
-            pg.miss_right = true;
-        }
-        if (real_m != pg.disp_m) {
-            /* Need right score to change: LEFT paddle misses */
-            pg.miss_left = true;
-        }
+        if (real_h != pg.disp_h) pg.miss_right = true;
+        if (real_m != pg.disp_m) pg.miss_left  = true;
     }
 
-    /* --- Physics step --- */
     if (now - pg.last_tick >= PONG_STEP_MS) {
         pg.last_tick = now;
 
         if (pg.waiting) {
             if (now - pg.wait_tick >= PONG_RESET_DELAY_MS) {
-                /* Serve toward the side that still needs to miss, or random */
                 bool serve_left = pg.miss_left;
                 if (!pg.miss_left && !pg.miss_right)
                     serve_left = (pg_rand_sign() > 0);
                 pg_serve(serve_left);
             }
         } else {
-            /* Move ball */
             pg.bx += pg.bdx;
             pg.by += pg.bdy;
 
             int br = FP_INT(pg.by);
             int bc = FP_INT(pg.bx);
 
-            /* Top/bottom wall bounce */
             if (pg.by < 0) {
                 pg.by = -pg.by;
                 pg.bdy = -pg.bdy;
@@ -1264,53 +1260,37 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
             br = FP_INT(pg.by);
             bc = FP_INT(pg.bx);
 
-            /* Left paddle check */
             if (bc <= PONG_LPAD_C + 1 && pg.bdx < 0) {
                 if (br >= pg.lpad && br < pg.lpad + PONG_PADDLE_H) {
-                    /* Paddle hit — bounce */
                     pg.bdx = -pg.bdx;
                     pg.bx = FP(PONG_LPAD_C + 2);
-
-                    /* Add english: top of paddle = upward, bottom = downward */
                     int hit = br - pg.lpad;
                     if (hit == 0) pg.bdy -= 80;
                     else if (hit == PONG_PADDLE_H - 1) pg.bdy += 80;
-
-                    /* Clamp vertical speed to keep things interesting */
                     if (pg.bdy > 220) pg.bdy = 220;
                     if (pg.bdy < -220) pg.bdy = -220;
-                    /* Ensure minimum vertical motion */
                     if (pg.bdy > 0 && pg.bdy < 40) pg.bdy = 40;
                     if (pg.bdy < 0 && pg.bdy > -40) pg.bdy = -40;
-
                 } else if (bc <= 0) {
-                    /* Ball past left edge → right side (minutes) scores */
                     pg.disp_m = real_m;
                     pg.miss_left = false;
-                    /* If hours also need updating and this was a left miss,
-                       we'll catch it on next serve */
                     pg.waiting = true;
                     pg.wait_tick = now;
                 }
             }
 
-            /* Right paddle check */
             if (bc >= PONG_RPAD_C - 1 && pg.bdx > 0) {
                 if (br >= pg.rpad && br < pg.rpad + PONG_PADDLE_H) {
                     pg.bdx = -pg.bdx;
                     pg.bx = FP(PONG_RPAD_C - 2);
-
                     int hit = br - pg.rpad;
                     if (hit == 0) pg.bdy -= 80;
                     else if (hit == PONG_PADDLE_H - 1) pg.bdy += 80;
-
                     if (pg.bdy > 220) pg.bdy = 220;
                     if (pg.bdy < -220) pg.bdy = -220;
                     if (pg.bdy > 0 && pg.bdy < 40) pg.bdy = 40;
                     if (pg.bdy < 0 && pg.bdy > -40) pg.bdy = -40;
-
                 } else if (bc >= NUM_COLS - 1) {
-                    /* Ball past right edge → left side (hours) scores */
                     pg.disp_h = real_h;
                     pg.miss_right = false;
                     pg.waiting = true;
@@ -1318,22 +1298,14 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
                 }
             }
 
-            /* --- Move paddles --- */
             int ball_row = FP_INT(pg.by);
-
-            /* Left paddle: miss if miss_left AND ball heading left */
-            bool l_miss = pg.miss_left && (pg.bdx < 0);
-            pg_move_pad(&pg.lpad, ball_row, 2, l_miss);
-
-            /* Right paddle: miss if miss_right AND ball heading right */
+            bool l_miss = pg.miss_left  && (pg.bdx < 0);
             bool r_miss = pg.miss_right && (pg.bdx > 0);
+            pg_move_pad(&pg.lpad, ball_row, 2, l_miss);
             pg_move_pad(&pg.rpad, ball_row, 2, r_miss);
         }
     }
 
-    /* ---- DRAW ---- */
-
-    /* Dotted center line */
     {
         int cc = NUM_COLS / 2;
         for (int r = 0; r < NUM_ROWS; r += 2) {
@@ -1341,32 +1313,25 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         }
     }
 
-    /* Left paddle */
     for (int i = 0; i < PONG_PADDLE_H; i++) {
         int r = pg.lpad + i;
-        if (r >= 0 && r < NUM_ROWS) {
+        if (r >= 0 && r < NUM_ROWS)
             buf[r][PONG_LPAD_C / 8] |= (1 << (PONG_LPAD_C % 8));
-        }
     }
 
-    /* Right paddle */
     for (int i = 0; i < PONG_PADDLE_H; i++) {
         int r = pg.rpad + i;
-        if (r >= 0 && r < NUM_ROWS) {
+        if (r >= 0 && r < NUM_ROWS)
             buf[r][PONG_RPAD_C / 8] |= (1 << (PONG_RPAD_C % 8));
-        }
     }
 
-    /* Ball (hidden during reset pause) */
     if (!pg.waiting) {
         int br = FP_INT(pg.by);
         int bc = FP_INT(pg.bx);
-        if (br >= 0 && br < NUM_ROWS && bc >= 0 && bc < NUM_COLS) {
+        if (br >= 0 && br < NUM_ROWS && bc >= 0 && bc < NUM_COLS)
             buf[br][bc / 8] |= (1 << (bc % 8));
-        }
     }
 
-    /* Scores — hours left, minutes right */
     {
         char h_str[4], m_str[4];
         sprintf(h_str, "%02d", pg.disp_h);
