@@ -30,6 +30,15 @@ void Screen_Snake(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_Typewriter(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
 
+/* ================= LOW BATTERY WARNING ================= */
+
+/**
+ * @brief Render the low-battery warning screen.
+ *        Alternates between "Low Battery" (3s) and "Please Plug In" (4s).
+ *        Text is centered on the display.
+ */
+void Screen_LowBatteryWarning(uint8_t buf[NUM_ROWS][TOTAL_BYTES]);
+
 /* ================= BATTERY SCREEN TOGGLE ================= */
 
 void Screen_Battery_Toggle(void);

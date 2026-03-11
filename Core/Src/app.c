@@ -26,6 +26,20 @@ static int pongclock_screen_index    = -1;
 extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;
 
+/* ================= LOW BATTERY / OVERDISCHARGE STATE ================= */
+
+typedef enum {
+    POWER_STATE_NORMAL,       /* Normal operation */
+    POWER_STATE_LOW_BATTERY,  /* SOC <= 1%, show warning, 10% brightness */
+    POWER_STATE_OVERDISCHARGE /* Voltage < 3.1V, screen off */
+} PowerState_t;
+
+static PowerState_t power_state = POWER_STATE_NORMAL;
+
+/* Brightness to restore when exiting low-battery mode */
+static uint8_t saved_brightness = 255;
+static bool    brightness_saved = false;
+
 /* ================= BOOT SEQUENCE ================= */
 
 static void App_BlankShiftRegisters(void)
@@ -111,6 +125,128 @@ static void App_RegisterScreens(void)
      * the developer unlocks it via 6 button presses. */
 }
 
+/* ================= LOW BATTERY HELPERS ================= */
+
+/**
+ * @brief  Enter low-battery warning mode.
+ *         Saves current brightness and drops to 10% (~25/255).
+ */
+static void App_EnterLowBattery(void)
+{
+    if (power_state == POWER_STATE_LOW_BATTERY) return;
+
+    /* Save brightness only if coming from normal mode */
+    if (power_state == POWER_STATE_NORMAL && !brightness_saved) {
+        saved_brightness = Matrix_GetBrightness();
+        brightness_saved = true;
+    }
+
+    power_state = POWER_STATE_LOW_BATTERY;
+
+    /* 10% brightness ≈ 25 out of 255 */
+    Matrix_SetBrightness(25);
+}
+
+/**
+ * @brief  Enter overdischarge protection mode.
+ *         Turns the screen completely off to save battery.
+ */
+static void App_EnterOverdischarge(void)
+{
+    if (power_state == POWER_STATE_OVERDISCHARGE) return;
+
+    /* Save brightness if not already saved */
+    if (!brightness_saved) {
+        saved_brightness = Matrix_GetBrightness();
+        brightness_saved = true;
+    }
+
+    power_state = POWER_STATE_OVERDISCHARGE;
+
+    /* Turn display off */
+    Matrix_SetBrightness(0);
+}
+
+/**
+ * @brief  Resume normal operation.
+ *         Restores brightness and returns to normal screen flow.
+ */
+static void App_ResumeNormal(void)
+{
+    if (power_state == POWER_STATE_NORMAL) return;
+
+    power_state = POWER_STATE_NORMAL;
+
+    /* Restore previous brightness */
+    if (brightness_saved) {
+        /* If auto brightness is on, just re-enable it — the sensor manager
+         * will take over on the next update cycle. If manual, restore saved. */
+        if (SensorManager_IsAutoBrightness()) {
+            /* Setting any non-zero value kicks it back on; the auto system
+             * will smoothly take over within ~30ms. */
+            Matrix_SetBrightness(saved_brightness > 0 ? saved_brightness : 128);
+        } else {
+            Matrix_SetBrightness(saved_brightness > 0 ? saved_brightness : 128);
+        }
+        brightness_saved = false;
+    } else {
+        Matrix_SetBrightness(128);
+    }
+
+    Screen_MarkDirty();
+}
+
+/**
+ * @brief  Check battery state and transition between power modes.
+ *         Called every App_Update() cycle.
+ */
+static void App_CheckPowerState(void)
+{
+    const SensorData_t *data = SensorManager_GetData();
+    bool charging = (data->current_mA >= 0);
+    uint16_t voltage = (uint16_t)data->voltage_mV;
+    uint16_t soc = (uint16_t)data->soc_percent;
+
+    switch (power_state) {
+        case POWER_STATE_NORMAL:
+            /* Check for overdischarge first (higher priority) */
+            if (!charging && voltage > 0 && voltage < 3100) {
+                App_EnterOverdischarge();
+            }
+            /* Then check for low SOC */
+            else if (!charging && soc <= 1) {
+                App_EnterLowBattery();
+            }
+            break;
+
+        case POWER_STATE_LOW_BATTERY:
+            /* Overdischarge takes priority */
+            if (!charging && voltage > 0 && voltage < 3100) {
+                App_EnterOverdischarge();
+            }
+            /* Resume if charging or SOC recovered */
+            else if (charging || soc > 1) {
+                App_ResumeNormal();
+            }
+            break;
+
+        case POWER_STATE_OVERDISCHARGE:
+            /* Resume if plugged in */
+            if (charging) {
+                App_ResumeNormal();
+            }
+            /* If voltage recovers above threshold (with hysteresis) and SOC > 1 */
+            else if (voltage >= 3200 && soc > 1) {
+                App_ResumeNormal();
+            }
+            /* If voltage recovers but SOC still critical, go to warning mode */
+            else if (voltage >= 3200 && soc <= 1) {
+                App_EnterLowBattery();
+            }
+            break;
+    }
+}
+
 /* ================= PUBLIC API ================= */
 
 void App_Init(I2C_HandleTypeDef *hi2c)
@@ -139,11 +275,43 @@ void App_Init(I2C_HandleTypeDef *hi2c)
     uint8_t saved = Settings_GetSavedScreen();
     Screen_SetCurrent(saved);
     Screen_BootDissolve();
+
+    power_state = POWER_STATE_NORMAL;
+    brightness_saved = false;
 }
 
 void App_Update(void)
 {
     SensorManager_Update();
+
+    /* ---- Check battery power state ---- */
+    App_CheckPowerState();
+
+    /* ---- Overdischarge: screen off, skip all rendering ---- */
+    if (power_state == POWER_STATE_OVERDISCHARGE) {
+        /* Still update sensors so we detect charger plug-in,
+         * but don't drive the display or process UI. */
+        HAL_Delay(100);  /* Slow down loop to save power */
+        return;
+    }
+
+    /* ---- Low battery: show warning screen only ---- */
+    if (power_state == POWER_STATE_LOW_BATTERY) {
+        /* Render the alternating warning message */
+        uint8_t buf[NUM_ROWS][TOTAL_BYTES];
+        memset(buf, 0, sizeof(buf));
+        Screen_LowBatteryWarning(buf);
+        Matrix_LoadBuffer(buf);
+
+        /* Keep brightness at 10% — re-assert in case auto-brightness tried
+         * to change it during SensorManager_Update() */
+        Matrix_SetBrightness(25);
+
+        HAL_Delay(50);  /* Slower update rate to save power */
+        return;
+    }
+
+    /* ================= NORMAL OPERATION (unchanged) ================= */
 
     Stopwatch_Update();
     Countdown_Update();

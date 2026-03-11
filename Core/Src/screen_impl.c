@@ -1346,3 +1346,29 @@ void Screen_PongClock(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
         Matrix_DrawText_Buf(buf, 0, rx, m_str);
     }
 }
+
+/* =====================================================================
+ *  LOW BATTERY WARNING SCREEN
+ *
+ *  Alternates between two centered messages:
+ *    "Low Battery"   — displayed for 3 seconds
+ *    "Please Plug In" — displayed for 4 seconds
+ *
+ *  Total cycle: 7 seconds, repeats indefinitely.
+ *  Called directly from App_Update() when in POWER_STATE_LOW_BATTERY,
+ *  bypassing the normal screen manager.
+ * =====================================================================*/
+
+void Screen_LowBatteryWarning(uint8_t buf[NUM_ROWS][TOTAL_BYTES])
+{
+    uint32_t now = HAL_GetTick();
+
+    /* 7-second cycle: 3s "Low Battery", 4s "Please Plug In" */
+    uint32_t cycle_ms = now % 7000;
+
+    if (cycle_ms < 3000) {
+        Matrix_DrawTextCentered_Buf(buf, 0, "Low Battery");
+    } else {
+        Matrix_DrawTextCentered_Buf(buf, 0, "Please Plug In");
+    }
+}
